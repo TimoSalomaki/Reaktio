@@ -7,6 +7,12 @@ function(reaktio_add_dev_targets)
         "${PROJECT_SOURCE_DIR}/games/*.cpp"
         "${PROJECT_SOURCE_DIR}/games/*.hpp"
     )
+    file(
+        GLOB_RECURSE reaktio_cpp_files
+        CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/engine/*.cpp"
+        "${PROJECT_SOURCE_DIR}/games/*.cpp"
+    )
     file(GLOB_RECURSE reaktio_doc_files CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/docs/*.md")
 
     find_program(CLANG_FORMAT_EXE NAMES clang-format)
@@ -32,12 +38,7 @@ function(reaktio_add_dev_targets)
             COMMAND
                 "${CLANG_TIDY_EXE}"
                 --quiet
-                "${PROJECT_SOURCE_DIR}/engine/foundation/src/BuildInfo.cpp"
-                "${PROJECT_SOURCE_DIR}/engine/foundation/src/Telemetry.cpp"
-                "${PROJECT_SOURCE_DIR}/engine/gameplay/src/GameModeRegistry.cpp"
-                "${PROJECT_SOURCE_DIR}/engine/platform/src/StackProbe.cpp"
-                "${PROJECT_SOURCE_DIR}/engine/app/src/SmokeApplication.cpp"
-                "${PROJECT_SOURCE_DIR}/games/templates/starter_mode/src/StarterMode.cpp"
+                ${reaktio_cpp_files}
                 --
                 -std=c++20
                 -I"${PROJECT_SOURCE_DIR}/engine/foundation/include"

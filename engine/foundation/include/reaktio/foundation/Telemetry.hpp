@@ -2,9 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <span>
+#include <deque>
 #include <string>
-#include <vector>
 
 namespace reaktio::foundation {
 
@@ -34,10 +33,12 @@ class TelemetryRecorder {
 
     [[nodiscard]] const TelemetrySnapshot* last() const noexcept;
     [[nodiscard]] TelemetrySnapshot* last_mutable() noexcept;
-    [[nodiscard]] std::span<const TelemetrySnapshot> history() const noexcept;
+    [[nodiscard]] std::size_t size() const noexcept;
 
   private:
-    std::vector<TelemetrySnapshot> history_;
+    static constexpr std::size_t k_max_history = 512;
+
+    std::deque<TelemetrySnapshot> history_;
 };
 
 [[nodiscard]] RuntimeBudget make_bootstrap_budget() noexcept;

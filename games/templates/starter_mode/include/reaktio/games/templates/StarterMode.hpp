@@ -11,6 +11,7 @@ class StarterMode final : public gameplay::IGameMode {
     [[nodiscard]] const gameplay::ModeDescriptor& descriptor() const noexcept override;
     void on_enter(gameplay::IModeHost& host) override;
     void on_fixed_step(gameplay::IModeHost& host, double) override;
+    void on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) override;
     void on_exit(gameplay::IModeHost& host) override;
 };
 

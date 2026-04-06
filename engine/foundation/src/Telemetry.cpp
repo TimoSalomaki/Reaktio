@@ -6,6 +6,10 @@
 namespace reaktio::foundation {
 
 void TelemetryRecorder::record(TelemetrySnapshot snapshot) {
+    if (history_.size() == k_max_history) {
+        history_.pop_front();
+    }
+
     history_.push_back(snapshot);
 }
 
@@ -25,8 +29,8 @@ TelemetrySnapshot* TelemetryRecorder::last_mutable() noexcept {
     return &history_.back();
 }
 
-std::span<const TelemetrySnapshot> TelemetryRecorder::history() const noexcept {
-    return std::span<const TelemetrySnapshot>{history_.data(), history_.size()};
+std::size_t TelemetryRecorder::size() const noexcept {
+    return history_.size();
 }
 
 RuntimeBudget make_bootstrap_budget() noexcept {

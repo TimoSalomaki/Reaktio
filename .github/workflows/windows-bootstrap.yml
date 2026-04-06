@@ -29,6 +29,9 @@ jobs:
       - name: Build smoke target
         run: cmake --build --preset build-ci-debug --target reaktio_smoke
 
+      - name: Run smoke target
+        run: .\build\ci-debug\Debug\reaktio_smoke.exe
+
       - name: Build bgfx tools bootstrap target
         if: github.event_name != 'pull_request'
         run: cmake --build --preset build-ci-debug --target reaktio-bootstrap-tools

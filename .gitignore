@@ -50,3 +50,6 @@
 # Generated runtime content
 /content/cooked/**
 !/content/cooked/.gitkeep
+
+# Runtime logs
+/logs/

@@ -27,13 +27,14 @@ void StarterMode::on_enter(gameplay::IModeHost&) {}
 
 void StarterMode::on_fixed_step(gameplay::IModeHost& host, double) {
     foundation::TelemetrySnapshot snapshot{};
-    snapshot.render_submission_ms = 0.0;
     snapshot.audio_drift_ms = 0.00;
     snapshot.draw_calls = 1;
     snapshot.visible_cues = 1;
 
     host.telemetry().record(snapshot);
 }
+
+void StarterMode::on_render_extract(gameplay::IModeHost&, double) {}
 
 void StarterMode::on_exit(gameplay::IModeHost&) {}
 

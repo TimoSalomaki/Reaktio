@@ -1,5 +1,6 @@
 #include "reaktio/app/SmokeApplication.hpp"
 
+#include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/games/templates/StarterMode.hpp"
 #include "reaktio/platform/StackProbe.hpp"
@@ -13,8 +14,12 @@ int main() {
         return 1;
     }
 
+    reaktio::platform::ApplicationConfig application_config =
+        reaktio::platform::make_smoke_application_config();
+
     reaktio::app::SmokeApplicationDependencies dependencies{
         reaktio::foundation::make_bootstrap_budget(),
+        std::move(application_config),
         reaktio::platform::capture_stack_probe(),
         std::move(game_mode_registry),
         &std::cout,

@@ -35,6 +35,7 @@ endfunction()
 
 add_library(reaktio_foundation STATIC
     engine/foundation/src/BuildInfo.cpp
+    engine/foundation/src/CrashSafeLog.cpp
     engine/foundation/src/Telemetry.cpp
 )
 add_library(Reaktio::foundation ALIAS reaktio_foundation)
@@ -62,6 +63,9 @@ target_link_libraries(reaktio_gameplay PUBLIC Reaktio::foundation)
 reaktio_configure_target(reaktio_gameplay)
 
 add_library(reaktio_platform STATIC
+    engine/platform/src/FrameClock.cpp
+    engine/platform/src/InputSnapshot.cpp
+    engine/platform/src/SdlApplicationShell.cpp
     engine/platform/src/StackProbe.cpp
 )
 add_library(Reaktio::platform ALIAS reaktio_platform)

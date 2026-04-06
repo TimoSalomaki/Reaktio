@@ -19,6 +19,7 @@ class IGameMode {
     [[nodiscard]] virtual const ModeDescriptor& descriptor() const noexcept = 0;
     virtual void on_enter(IModeHost& host) = 0;
     virtual void on_fixed_step(IModeHost& host, double fixed_delta_seconds) = 0;
+    virtual void on_render_extract(IModeHost& host, double interpolation_alpha) = 0;
     virtual void on_exit(IModeHost& host) = 0;
 };
 

@@ -165,15 +165,15 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 2 - Platform Layer and Application Shell
 
-- [ ] Create the SDL application entry layer and ensure all SDL lifecycle work happens on the intended main thread.
-- [ ] Implement window creation, resize handling, fullscreen switching, DPI awareness, and orderly shutdown.
+- [x] Create the SDL application entry layer and ensure all SDL lifecycle work happens on the intended main thread.
+- [x] Implement window creation, resize handling, fullscreen switching, DPI awareness, and orderly shutdown.
 - [ ] Implement native window handle extraction from SDL and feed it into bgfx platform initialization.
-- [ ] Create the core application loop with explicit phases for event pump, fixed-step simulation, render extraction, and present.
-- [ ] Add a platform time service that clearly distinguishes wall clock, frame delta, and fixed-step accumulator time.
-- [ ] Implement keyboard, mouse, controller, and text-input event ingestion.
-- [ ] Add IME-safe text input handling for future typing and language-learning modes.
-- [ ] Add application configuration for renderer backend selection, window mode, VSync, and debugging flags.
-- [ ] Add crash-safe logging and startup diagnostics.
+- [x] Create the core application loop with explicit phases for event pump, fixed-step simulation, render extraction, and present.
+- [x] Add a platform time service that clearly distinguishes wall clock, frame delta, and fixed-step accumulator time.
+- [x] Implement keyboard, mouse, controller, and text-input event ingestion.
+- [x] Add IME-safe text input handling for future typing and language-learning modes.
+- [x] Add application configuration for renderer backend selection, window mode, VSync, and debugging flags.
+- [x] Add crash-safe logging and startup diagnostics.
 - [ ] Add a basic in-engine debug overlay showing frame time, renderer backend, and input state.
 
 ### Phase 3 - Foundation, World, Mode Host, and Runtime Contracts
