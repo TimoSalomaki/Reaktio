@@ -203,7 +203,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [ ] Add material, shader program, and uniform management.
 - [ ] Add dynamic and transient buffer management for note fields, particles, and procedurally generated geometry.
 - [ ] Add texture, mesh, and font resource loading for cooked assets.
-- [ ] Implement render extraction so gameplay produces render packets rather than calling bgfx directly.
+- [x] Implement render extraction so gameplay produces render packets rather than calling bgfx directly.
 - [ ] Add batch and instancing paths for large note counts and repeated obstacles.
 - [ ] Add a simple post-processing chain for color grading, bloom, vignette, and screen-space feedback.
 - [ ] Add debug visualizations for collision shapes, cue lanes, timing lines, and spawn windows.

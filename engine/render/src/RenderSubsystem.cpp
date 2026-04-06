@@ -1,3 +1,4 @@
+#include "reaktio/render/RenderExtraction.hpp"
 #include "reaktio/render/RenderSubsystem.hpp"
 
 #include "reaktio/foundation/CrashSafeLog.hpp"
@@ -138,15 +139,40 @@ struct RenderSubsystem::Impl {
 
         configure_views();
         bgfx::touch(to_view_id(RenderView::MainScene));
+        debug_text_active_this_frame = false;
+        debug_flags_this_frame = config.debug.enable_gpu_debug ? BGFX_DEBUG_STATS : BGFX_DEBUG_NONE;
+        bgfx::setDebug(debug_flags_this_frame);
+    }
 
-        std::uint32_t debug_flags = BGFX_DEBUG_NONE;
-        if (config.debug.enable_debug_overlay) {
-            debug_flags |= BGFX_DEBUG_TEXT;
+    void submit_extracted_frame(const RenderFramePackets& packets) noexcept {
+        if (!stats.initialized) {
+            return;
         }
-        if (config.debug.enable_gpu_debug) {
-            debug_flags |= BGFX_DEBUG_STATS;
+
+        if (packets.main_scene_clear.has_value()) {
+            const ViewClearCommand& clear = *packets.main_scene_clear;
+            std::uint16_t clear_flags = BGFX_CLEAR_NONE;
+            if (clear.clear_color) {
+                clear_flags |= BGFX_CLEAR_COLOR;
+            }
+            if (clear.clear_depth) {
+                clear_flags |= BGFX_CLEAR_DEPTH;
+            }
+
+            bgfx::setViewClear(
+                to_view_id(clear.view),
+                clear_flags,
+                clear.rgba,
+                clear.depth,
+                clear.stencil);
         }
-        bgfx::setDebug(debug_flags);
+
+        if (!packets.debug_text_commands.empty()) {
+            ensure_debug_text();
+            for (const DebugTextCommand& command : packets.debug_text_commands) {
+                bgfx::dbgTextPrintf(command.x, command.y, command.attribute, "%s", command.text.c_str());
+            }
+        }
     }
 
     void draw_debug_overlay(
@@ -157,7 +183,7 @@ struct RenderSubsystem::Impl {
             return;
         }
 
-        bgfx::dbgTextClear(0x1f, false);
+        ensure_debug_text();
         bgfx::dbgTextPrintf(0, 0, 0x4f, "Reaktio Debug Overlay");
         bgfx::dbgTextPrintf(0, 1, 0x0f, "renderer: %s", stats.renderer_name.data());
         bgfx::dbgTextPrintf(
@@ -308,13 +334,26 @@ struct RenderSubsystem::Impl {
         }
     }
 
+    void ensure_debug_text() noexcept {
+        if (debug_text_active_this_frame) {
+            return;
+        }
+
+        debug_flags_this_frame |= BGFX_DEBUG_TEXT;
+        bgfx::setDebug(debug_flags_this_frame);
+        bgfx::dbgTextClear(0x00, false);
+        debug_text_active_this_frame = true;
+    }
+
     platform::ApplicationConfig config;
     foundation::CrashSafeLog* log;
     RenderStats stats;
     std::uint16_t backbuffer_width{};
     std::uint16_t backbuffer_height{};
     std::uint32_t reset_flags{};
+    std::uint32_t debug_flags_this_frame{};
     bool using_headless_fallback{false};
+    bool debug_text_active_this_frame{false};
     bool render_frame_primed{false};
 };
 
@@ -329,6 +368,10 @@ bool RenderSubsystem::initialize(const platform::WindowState& window_state) {
 
 void RenderSubsystem::begin_frame(const platform::WindowState& window_state) {
     impl_->begin_frame(window_state);
+}
+
+void RenderSubsystem::submit_extracted_frame(const RenderFramePackets& packets) noexcept {
+    impl_->submit_extracted_frame(packets);
 }
 
 void RenderSubsystem::draw_debug_overlay(

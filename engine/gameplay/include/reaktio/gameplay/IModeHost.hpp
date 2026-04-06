@@ -12,6 +12,10 @@ struct StackProbe;
 struct WindowState;
 } // namespace reaktio::platform
 
+namespace reaktio::render {
+class RenderExtractionContext;
+} // namespace reaktio::render
+
 namespace reaktio::gameplay {
 
 class IModeHost {
@@ -23,6 +27,7 @@ class IModeHost {
     [[nodiscard]] virtual const platform::InputSnapshot& input_snapshot() const noexcept = 0;
     [[nodiscard]] virtual const platform::FrameTiming& frame_timing() const noexcept = 0;
     [[nodiscard]] virtual const platform::WindowState& window_state() const noexcept = 0;
+    [[nodiscard]] virtual render::RenderExtractionContext& render_extraction() noexcept = 0;
     [[nodiscard]] virtual foundation::TelemetryRecorder& telemetry() noexcept = 0;
     virtual void request_quit() noexcept = 0;
     [[nodiscard]] virtual bool toggle_fullscreen() noexcept = 0;

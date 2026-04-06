@@ -97,6 +97,7 @@ int SmokeApplication::run() {
     while (!platform_shell.should_quit()) {
         platform_shell.begin_frame();
         render_subsystem.begin_frame(platform_shell.window_state());
+        render_extraction_context_.begin_frame();
         const auto frame_start = std::chrono::steady_clock::now();
         const std::size_t telemetry_count_before_frame = telemetry_recorder_.size();
 
@@ -119,6 +120,7 @@ int SmokeApplication::run() {
 
         const auto render_extract_start = std::chrono::steady_clock::now();
         mode->on_render_extract(*this, platform_shell.frame_timing().interpolation_alpha);
+        render_subsystem.submit_extracted_frame(render_extraction_context_.packets());
         render_subsystem.draw_debug_overlay(
             platform_shell.frame_timing(),
             platform_shell.input_snapshot(),
@@ -182,6 +184,10 @@ const platform::FrameTiming& SmokeApplication::frame_timing() const noexcept {
 const platform::WindowState& SmokeApplication::window_state() const noexcept {
     assert(active_shell_ != nullptr);
     return active_shell_->window_state();
+}
+
+render::RenderExtractionContext& SmokeApplication::render_extraction() noexcept {
+    return render_extraction_context_;
 }
 
 foundation::TelemetryRecorder& SmokeApplication::telemetry() noexcept {

@@ -2,6 +2,10 @@
 
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
+#include "reaktio/platform/InputSnapshot.hpp"
+#include "reaktio/render/RenderExtraction.hpp"
+
+#include <sstream>
 
 namespace reaktio::games::templates {
 
@@ -34,7 +38,17 @@ void StarterMode::on_fixed_step(gameplay::IModeHost& host, double) {
     host.telemetry().record(snapshot);
 }
 
-void StarterMode::on_render_extract(gameplay::IModeHost&, double) {}
+void StarterMode::on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) {
+    host.render_extraction().set_main_scene_clear(0x16324cff);
+
+    std::ostringstream interpolation_stream;
+    interpolation_stream << "starter extraction alpha=" << interpolation_alpha;
+    host.render_extraction().add_debug_text(0, 8, 0x0e, interpolation_stream.str());
+
+    std::ostringstream input_stream;
+    input_stream << "starter keys this frame=" << host.input_snapshot().keyboard_events().size();
+    host.render_extraction().add_debug_text(0, 9, 0x0a, input_stream.str());
+}
 
 void StarterMode::on_exit(gameplay::IModeHost&) {}
 

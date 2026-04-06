@@ -33,6 +33,14 @@ function(reaktio_configure_target target_name)
     reaktio_enable_static_analysis(${target_name})
 endfunction()
 
+add_library(reaktio_platform_api INTERFACE)
+add_library(Reaktio::platform_api ALIAS reaktio_platform_api)
+target_include_directories(reaktio_platform_api INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/engine/platform/include")
+
+add_library(reaktio_render_api INTERFACE)
+add_library(Reaktio::render_api ALIAS reaktio_render_api)
+target_include_directories(reaktio_render_api INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/include")
+
 add_library(reaktio_foundation STATIC
     engine/foundation/src/BuildInfo.cpp
     engine/foundation/src/CrashSafeLog.cpp
@@ -73,10 +81,11 @@ target_include_directories(reaktio_platform
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/platform/include"
 )
-target_link_libraries(reaktio_platform PUBLIC Reaktio::foundation SDL3::SDL3 bgfx)
+target_link_libraries(reaktio_platform PUBLIC Reaktio::foundation Reaktio::platform_api SDL3::SDL3 bgfx)
 reaktio_configure_target(reaktio_platform)
 
 add_library(reaktio_render STATIC
+    engine/render/src/RenderExtraction.cpp
     engine/render/src/RenderSubsystem.cpp
 )
 add_library(Reaktio::render ALIAS reaktio_render)
@@ -84,7 +93,7 @@ target_include_directories(reaktio_render
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/include"
 )
-target_link_libraries(reaktio_render PUBLIC Reaktio::foundation Reaktio::platform bgfx)
+target_link_libraries(reaktio_render PUBLIC Reaktio::foundation Reaktio::platform Reaktio::render_api bgfx)
 reaktio_configure_target(reaktio_render)
 
 add_library(reaktio_starter_mode STATIC
@@ -96,6 +105,7 @@ target_include_directories(reaktio_starter_mode
         "${CMAKE_CURRENT_SOURCE_DIR}/games/templates/starter_mode/include"
 )
 target_link_libraries(reaktio_starter_mode PUBLIC Reaktio::foundation Reaktio::gameplay)
+target_link_libraries(reaktio_starter_mode PUBLIC Reaktio::platform_api Reaktio::render_api)
 reaktio_configure_target(reaktio_starter_mode)
 
 add_library(reaktio_app STATIC

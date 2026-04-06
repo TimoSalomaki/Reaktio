@@ -1,5 +1,7 @@
 #pragma once
 
+#include "reaktio/render/RenderTypes.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -18,15 +20,7 @@ struct WindowState;
 
 namespace reaktio::render {
 
-enum class RenderView : std::uint16_t {
-    MainScene = 0,
-    DebugOverlay = 1,
-    Count = 2,
-};
-
-[[nodiscard]] constexpr std::uint16_t to_view_id(RenderView view) noexcept {
-    return static_cast<std::uint16_t>(view);
-}
+struct RenderFramePackets;
 
 struct RenderStats {
     bool initialized{false};
@@ -51,6 +45,7 @@ class RenderSubsystem {
 
     bool initialize(const platform::WindowState& window_state);
     void begin_frame(const platform::WindowState& window_state);
+    void submit_extracted_frame(const RenderFramePackets& packets) noexcept;
     void draw_debug_overlay(
         const platform::FrameTiming& frame_timing,
         const platform::InputSnapshot& input_snapshot,
