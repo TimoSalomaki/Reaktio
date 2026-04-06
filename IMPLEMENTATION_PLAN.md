@@ -198,7 +198,7 @@ These are support libraries, not replacements for SDL or bgfx.
 
 - [x] Create the render subsystem wrapper that owns bgfx initialization, reset, frame submission, and shutdown.
 - [x] Define a view or pass allocation policy so subsystems do not fight over bgfx view IDs.
-- [ ] Implement camera abstractions for orthographic 2D, perspective 2.5D, and free 3D.
+- [x] Implement camera abstractions for orthographic 2D, perspective 2.5D, and free 3D.
 - [ ] Implement sprite, quad, text, mesh, line, and debug-draw render paths.
 - [ ] Add material, shader program, and uniform management.
 - [ ] Add dynamic and transient buffer management for note fields, particles, and procedurally generated geometry.

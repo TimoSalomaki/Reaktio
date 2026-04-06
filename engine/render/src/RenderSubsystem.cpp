@@ -1,3 +1,4 @@
+#include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 #include "reaktio/render/RenderSubsystem.hpp"
 
@@ -138,6 +139,10 @@ struct RenderSubsystem::Impl {
         }
 
         configure_views();
+        apply_camera_command(ViewCameraCommand{
+            .view = RenderView::MainScene,
+            .camera = make_default_orthographic_camera_2d(backbuffer_width, backbuffer_height),
+        });
         bgfx::touch(to_view_id(RenderView::MainScene));
         debug_text_active_this_frame = false;
         debug_flags_this_frame = config.debug.enable_gpu_debug ? BGFX_DEBUG_STATS : BGFX_DEBUG_NONE;
@@ -165,6 +170,10 @@ struct RenderSubsystem::Impl {
                 clear.rgba,
                 clear.depth,
                 clear.stencil);
+        }
+
+        for (const ViewCameraCommand& command : packets.camera_commands) {
+            apply_camera_command(command);
         }
 
         if (!packets.debug_text_commands.empty()) {
@@ -310,6 +319,10 @@ struct RenderSubsystem::Impl {
             return;
         }
 
+        if (const bgfx::Caps* caps = bgfx::getCaps()) {
+            homogeneous_depth = caps->homogeneousDepth;
+        }
+
         const bgfx::RendererType::Enum renderer_type = bgfx::getRendererType();
         stats.renderer_name = bgfx::getRendererName(renderer_type);
         stats.backbuffer_width = backbuffer_width;
@@ -345,6 +358,18 @@ struct RenderSubsystem::Impl {
         debug_text_active_this_frame = true;
     }
 
+    void apply_camera_command(const ViewCameraCommand& command) noexcept {
+        const CameraMatrices matrices = build_camera_matrices(command.camera, CameraProjectionContext{
+            .backbuffer_width = backbuffer_width,
+            .backbuffer_height = backbuffer_height,
+            .homogeneous_depth = homogeneous_depth,
+        });
+        bgfx::setViewTransform(
+            to_view_id(command.view),
+            matrices.view.data(),
+            matrices.projection.data());
+    }
+
     platform::ApplicationConfig config;
     foundation::CrashSafeLog* log;
     RenderStats stats;
@@ -352,6 +377,7 @@ struct RenderSubsystem::Impl {
     std::uint16_t backbuffer_height{};
     std::uint32_t reset_flags{};
     std::uint32_t debug_flags_this_frame{};
+    bool homogeneous_depth{false};
     bool using_headless_fallback{false};
     bool debug_text_active_this_frame{false};
     bool render_frame_primed{false};

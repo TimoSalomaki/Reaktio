@@ -85,6 +85,7 @@ target_link_libraries(reaktio_platform PUBLIC Reaktio::foundation Reaktio::platf
 reaktio_configure_target(reaktio_platform)
 
 add_library(reaktio_render STATIC
+    engine/render/src/RenderCamera.cpp
     engine/render/src/RenderExtraction.cpp
     engine/render/src/RenderSubsystem.cpp
 )
@@ -92,6 +93,8 @@ add_library(Reaktio::render ALIAS reaktio_render)
 target_include_directories(reaktio_render
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/include"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/bx/include"
 )
 target_link_libraries(reaktio_render PUBLIC Reaktio::foundation Reaktio::platform Reaktio::render_api bgfx)
 reaktio_configure_target(reaktio_render)

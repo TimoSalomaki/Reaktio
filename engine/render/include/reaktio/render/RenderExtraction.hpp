@@ -1,5 +1,6 @@
 #pragma once
 
+#include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderTypes.hpp"
 
 #include <cstdint>
@@ -28,6 +29,7 @@ struct DebugTextCommand {
 
 struct RenderFramePackets {
     std::optional<ViewClearCommand> main_scene_clear;
+    std::vector<ViewCameraCommand> camera_commands;
     std::vector<DebugTextCommand> debug_text_commands;
 };
 
@@ -43,6 +45,9 @@ class RenderExtractionContext {
         std::uint16_t y,
         std::uint8_t attribute,
         std::string_view text);
+    void set_view_camera(RenderView view, const OrthographicCamera2D& camera);
+    void set_view_camera(RenderView view, const PerspectiveCamera25D& camera);
+    void set_view_camera(RenderView view, const FreeCamera3D& camera);
 
     [[nodiscard]] const RenderFramePackets& packets() const noexcept;
 
