@@ -94,7 +94,7 @@ void CrashSafeLog::write(LogLevel level, std::string_view message) noexcept {
         std::fwrite(prefix, sizeof(char), safe_prefix_length, file_);
         std::fwrite(message.data(), sizeof(char), message.size(), file_);
         std::fputc('\n', file_);
-        flush_file();
+        flush_file(level != LogLevel::Info);
     }
 }
 
@@ -104,13 +104,13 @@ const std::filesystem::path& CrashSafeLog::file_path() const noexcept {
 
 void CrashSafeLog::close_file() noexcept {
     if (file_ != nullptr) {
-        flush_file();
+        flush_file(true);
         std::fclose(file_);
         file_ = nullptr;
     }
 }
 
-void CrashSafeLog::flush_file() noexcept {
+void CrashSafeLog::flush_file(bool durable) noexcept {
     if (file_ == nullptr) {
         return;
     }
@@ -118,7 +118,9 @@ void CrashSafeLog::flush_file() noexcept {
     std::fflush(file_);
 
 #if defined(_WIN32)
-    _commit(_fileno(file_));
+    if (durable) {
+        _commit(_fileno(file_));
+    }
 #endif
 }
 

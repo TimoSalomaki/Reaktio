@@ -44,6 +44,7 @@ struct MainLoopConfig {
 
 struct DebugOptions {
     bool enable_startup_diagnostics{true};
+    bool enable_debug_overlay{true};
     bool enable_input_diagnostics{false};
     bool enable_gpu_debug{false};
 };
@@ -104,9 +105,10 @@ struct ApplicationConfig {
     config.window.mode = WindowMode::Windowed;
     config.window.start_hidden = true;
     config.window.enable_text_input = true;
-    config.main_loop.max_frame_count = 4;
-    config.renderer_backend = RendererBackendPreference::Automatic;
+    config.main_loop.max_frame_count = 16;
+    config.renderer_backend = RendererBackendPreference::Noop;
     config.vsync_enabled = false;
+    config.debug.enable_debug_overlay = false;
     return config;
 }
 

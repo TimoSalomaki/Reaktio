@@ -1,6 +1,7 @@
 #include "reaktio/app/SmokeApplication.hpp"
 
 #include "reaktio/foundation/BuildInfo.hpp"
+#include "reaktio/render/RenderSubsystem.hpp"
 #include "reaktio/platform/SdlApplicationShell.hpp"
 
 #include <SDL3/SDL_init.h>
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <sstream>
+#include <string>
 
 namespace {
 
@@ -57,8 +59,25 @@ int SmokeApplication::run() {
     }
 
     active_shell_ = &platform_shell;
+    render::RenderSubsystem render_subsystem{
+        dependencies_.application_config,
+        crash_safe_log_,
+    };
+    if (!render_subsystem.initialize(platform_shell.window_state())) {
+        active_shell_ = nullptr;
+        return 1;
+    }
+
     if (dependencies_.application_config.debug.enable_startup_diagnostics) {
         log_window_state();
+
+        std::ostringstream render_stream;
+        render_stream << "  active renderer=" << render_subsystem.stats().renderer_name
+                      << " backbuffer=" << render_subsystem.stats().backbuffer_width << 'x'
+                      << render_subsystem.stats().backbuffer_height << " views="
+                      << render_subsystem.stats().view_count << " headless-fallback="
+                      << render_subsystem.stats().using_headless_fallback;
+        crash_safe_log_.write(foundation::LogLevel::Info, render_stream.str());
     }
 
     std::unique_ptr<gameplay::IGameMode> mode = dependencies_.game_mode_registry.create_first();
@@ -77,6 +96,7 @@ int SmokeApplication::run() {
 
     while (!platform_shell.should_quit()) {
         platform_shell.begin_frame();
+        render_subsystem.begin_frame(platform_shell.window_state());
         const auto frame_start = std::chrono::steady_clock::now();
         const std::size_t telemetry_count_before_frame = telemetry_recorder_.size();
 
@@ -91,20 +111,28 @@ int SmokeApplication::run() {
             platform_shell.frame_clock().consume_fixed_step();
         }
 
-        const auto render_extract_start = std::chrono::steady_clock::now();
-        mode->on_render_extract(*this, platform_shell.frame_timing().interpolation_alpha);
-        platform_shell.present();
-        const auto render_extract_end = std::chrono::steady_clock::now();
-
         if (telemetry_recorder_.size() == telemetry_count_before_frame) {
             telemetry_recorder_.record(foundation::TelemetrySnapshot{});
         }
 
-        if (foundation::TelemetrySnapshot* snapshot = telemetry_recorder_.last_mutable()) {
-            snapshot->frame_ms = milliseconds_between(frame_start, render_extract_end);
-            snapshot->simulation_ms = simulation_ms;
-            snapshot->render_submission_ms = milliseconds_between(render_extract_start, render_extract_end);
-            snapshot->resident_memory_mib = platform::query_process_resident_memory_mib();
+        foundation::TelemetrySnapshot* frame_snapshot = telemetry_recorder_.last_mutable();
+
+        const auto render_extract_start = std::chrono::steady_clock::now();
+        mode->on_render_extract(*this, platform_shell.frame_timing().interpolation_alpha);
+        render_subsystem.draw_debug_overlay(
+            platform_shell.frame_timing(),
+            platform_shell.input_snapshot(),
+            frame_snapshot);
+        render_subsystem.end_frame();
+        platform_shell.present();
+        const auto render_extract_end = std::chrono::steady_clock::now();
+
+        if (frame_snapshot != nullptr) {
+            frame_snapshot->frame_ms = milliseconds_between(frame_start, render_extract_end);
+            frame_snapshot->simulation_ms = simulation_ms;
+            frame_snapshot->render_submission_ms = milliseconds_between(render_extract_start, render_extract_end);
+            frame_snapshot->resident_memory_mib = platform::query_process_resident_memory_mib();
+            frame_snapshot->draw_calls = render_subsystem.stats().draw_calls;
         }
 
         if (dependencies_.application_config.main_loop.max_frame_count > 0 &&

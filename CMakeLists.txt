@@ -76,6 +76,17 @@ target_include_directories(reaktio_platform
 target_link_libraries(reaktio_platform PUBLIC Reaktio::foundation SDL3::SDL3 bgfx)
 reaktio_configure_target(reaktio_platform)
 
+add_library(reaktio_render STATIC
+    engine/render/src/RenderSubsystem.cpp
+)
+add_library(Reaktio::render ALIAS reaktio_render)
+target_include_directories(reaktio_render
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/include"
+)
+target_link_libraries(reaktio_render PUBLIC Reaktio::foundation Reaktio::platform bgfx)
+reaktio_configure_target(reaktio_render)
+
 add_library(reaktio_starter_mode STATIC
     games/templates/starter_mode/src/StarterMode.cpp
 )
@@ -100,6 +111,7 @@ target_link_libraries(reaktio_app
         Reaktio::foundation
         Reaktio::gameplay
         Reaktio::platform
+    Reaktio::render
 )
 reaktio_configure_target(reaktio_app)
 

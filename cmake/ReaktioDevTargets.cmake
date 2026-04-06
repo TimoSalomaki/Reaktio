@@ -44,6 +44,7 @@ function(reaktio_add_dev_targets)
                 -I"${PROJECT_SOURCE_DIR}/engine/foundation/include"
                 -I"${PROJECT_SOURCE_DIR}/engine/gameplay/include"
                 -I"${PROJECT_SOURCE_DIR}/engine/platform/include"
+                -I"${PROJECT_SOURCE_DIR}/engine/render/include"
                 -I"${PROJECT_SOURCE_DIR}/engine/app/include"
                 -I"${PROJECT_SOURCE_DIR}/games/templates/starter_mode/include"
                 -I"${PROJECT_SOURCE_DIR}/external/SDL/include"

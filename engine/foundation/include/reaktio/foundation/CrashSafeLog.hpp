@@ -29,7 +29,7 @@ class CrashSafeLog {
 
   private:
     void close_file() noexcept;
-    void flush_file() noexcept;
+    void flush_file(bool durable) noexcept;
 
     std::ostream* mirror_stream_{};
     std::FILE* file_{};

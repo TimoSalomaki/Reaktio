@@ -167,14 +167,14 @@ These are support libraries, not replacements for SDL or bgfx.
 
 - [x] Create the SDL application entry layer and ensure all SDL lifecycle work happens on the intended main thread.
 - [x] Implement window creation, resize handling, fullscreen switching, DPI awareness, and orderly shutdown.
-- [ ] Implement native window handle extraction from SDL and feed it into bgfx platform initialization.
+- [x] Implement native window handle extraction from SDL and feed it into bgfx platform initialization.
 - [x] Create the core application loop with explicit phases for event pump, fixed-step simulation, render extraction, and present.
 - [x] Add a platform time service that clearly distinguishes wall clock, frame delta, and fixed-step accumulator time.
 - [x] Implement keyboard, mouse, controller, and text-input event ingestion.
 - [x] Add IME-safe text input handling for future typing and language-learning modes.
 - [x] Add application configuration for renderer backend selection, window mode, VSync, and debugging flags.
 - [x] Add crash-safe logging and startup diagnostics.
-- [ ] Add a basic in-engine debug overlay showing frame time, renderer backend, and input state.
+- [x] Add a basic in-engine debug overlay showing frame time, renderer backend, and input state.
 
 ### Phase 3 - Foundation, World, Mode Host, and Runtime Contracts
 
@@ -196,8 +196,8 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 4 - Rendering Foundation with bgfx
 
-- [ ] Create the render subsystem wrapper that owns bgfx initialization, reset, frame submission, and shutdown.
-- [ ] Define a view or pass allocation policy so subsystems do not fight over bgfx view IDs.
+- [x] Create the render subsystem wrapper that owns bgfx initialization, reset, frame submission, and shutdown.
+- [x] Define a view or pass allocation policy so subsystems do not fight over bgfx view IDs.
 - [ ] Implement camera abstractions for orthographic 2D, perspective 2.5D, and free 3D.
 - [ ] Implement sprite, quad, text, mesh, line, and debug-draw render paths.
 - [ ] Add material, shader program, and uniform management.
