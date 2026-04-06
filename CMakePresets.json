@@ -1,0 +1,66 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "REAKTIO_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "base"
+    },
+    {
+      "name": "release",
+      "inherits": "base"
+    },
+    {
+      "name": "relwithdebinfo",
+      "inherits": "base"
+    },
+    {
+      "name": "ci-debug",
+      "inherits": "debug",
+      "cacheVariables": {
+        "REAKTIO_ENABLE_CLANG_TIDY": "OFF",
+        "REAKTIO_ENABLE_CPPCHECK": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-debug",
+      "configurePreset": "debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "build-release",
+      "configurePreset": "release",
+      "configuration": "Release"
+    },
+    {
+      "name": "build-relwithdebinfo",
+      "configurePreset": "relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "build-ci-debug",
+      "configurePreset": "ci-debug",
+      "configuration": "Debug"
+    }
+  ]
+}

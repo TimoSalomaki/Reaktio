@@ -132,36 +132,36 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 0 - Preproduction and Architecture Freeze
 
-- [ ] Define hard project goals, non-goals, and target game families for the first year.
-- [ ] Freeze the core engine invariants: fixed-step simulation, audio-authoritative music clock, data-driven cues, and render extraction.
-- [ ] Define target device classes and hard CPU, GPU, memory, draw-call, cue-density, and audio-latency budgets for version 1.
-- [ ] Choose the exact dependency strategy: pinned git submodules versus locked package manager versions for SDL and support libraries.
-- [ ] Vendor bx, bimg, and bgfx at pinned revisions and document the update policy.
-- [ ] Decide whether runtime bgfx integration will use the official amalgamated build or a maintained CMake wrapper, then record the decision in an architecture note.
-- [ ] Write architecture decision records for time model, render model, content pipeline, replay model, module boundaries, and extension model.
-- [ ] Write a dedicated ADR for the authoritative audio clock covering startup latency, seek semantics, loop behavior, offset calibration, and drift correction policy.
-- [ ] Plan and document an early proof-of-concept spike for authoritative song-position measurement and transport correction before gameplay scoring depends on it.
-- [ ] Define coding standards, ownership conventions, error handling rules, and threading rules.
-- [ ] Define the engine API boundary between engine modules and individual game modes.
-- [ ] Decide the version 1 mode-extension strategy: compile-time registered modules first, runtime or binary plugins deferred unless justified later.
-- [ ] Define a naming scheme and identifier strategy for assets, cues, actions, and modes.
-- [ ] Define the minimum authoring loop required before serious content production: chart validation, transport inspection, lightweight preview, and a starter mode template.
-- [ ] Create an explicit scope blacklist for version 1 to prevent premature engine bloat.
+- [x] Define hard project goals, non-goals, and target game families for the first year.
+- [x] Freeze the core engine invariants: fixed-step simulation, audio-authoritative music clock, data-driven cues, and render extraction.
+- [x] Define target device classes and hard CPU, GPU, memory, draw-call, cue-density, and audio-latency budgets for version 1.
+- [x] Choose the exact dependency strategy: pinned git submodules versus locked package manager versions for SDL and support libraries.
+- [x] Vendor bx, bimg, and bgfx at pinned revisions and document the update policy.
+- [x] Decide whether runtime bgfx integration will use the official amalgamated build or a maintained CMake wrapper, then record the decision in an architecture note.
+- [x] Write architecture decision records for time model, render model, content pipeline, replay model, module boundaries, and extension model.
+- [x] Write a dedicated ADR for the authoritative audio clock covering startup latency, seek semantics, loop behavior, offset calibration, and drift correction policy.
+- [x] Plan and document an early proof-of-concept spike for authoritative song-position measurement and transport correction before gameplay scoring depends on it.
+- [x] Define coding standards, ownership conventions, error handling rules, and threading rules.
+- [x] Define the engine API boundary between engine modules and individual game modes.
+- [x] Decide the version 1 mode-extension strategy: compile-time registered modules first, runtime or binary plugins deferred unless justified later.
+- [x] Define a naming scheme and identifier strategy for assets, cues, actions, and modes.
+- [x] Define the minimum authoring loop required before serious content production: chart validation, transport inspection, lightweight preview, and a starter mode template.
+- [x] Create an explicit scope blacklist for version 1 to prevent premature engine bloat.
 
 ### Phase 1 - Build System and Repository Bootstrap
 
-- [ ] Create the top-level CMake project with presets for Debug, Release, and RelWithDebInfo.
-- [ ] Add compiler warning policy, sanitizers where available, and static-analysis targets.
-- [ ] Integrate SDL3 into the build in a pinned and reproducible way.
-- [ ] Integrate bgfx, bx, and bimg in a reproducible way without relying on the bgfx example framework.
-- [ ] Add a bootstrap target or script for bgfx tools such as shaderc, texturec, and geometryc.
-- [ ] Set up a content output layout for raw and cooked assets.
-- [ ] Add formatting and lint targets.
-- [ ] Add CI for Windows first, then prepare for Linux and macOS expansion.
-- [ ] Add a minimal smoke-test executable target.
-- [ ] Add baseline profiling and telemetry hooks so the first smoke tests already report frame time, memory use, and timing metrics against the defined budgets.
-- [ ] Add a starter game-mode build target or stub so extension workflow is exercised from the first bootstrap.
-- [ ] Add a docs target or workflow for architecture notes and generated documentation.
+- [x] Create the top-level CMake project with presets for Debug, Release, and RelWithDebInfo.
+- [x] Add compiler warning policy, sanitizers where available, and static-analysis targets.
+- [x] Integrate SDL3 into the build in a pinned and reproducible way.
+- [x] Integrate bgfx, bx, and bimg in a reproducible way without relying on the bgfx example framework.
+- [x] Add a bootstrap target or script for bgfx tools such as shaderc, texturec, and geometryc.
+- [x] Set up a content output layout for raw and cooked assets.
+- [x] Add formatting and lint targets.
+- [x] Add CI for Windows first, then prepare for Linux and macOS expansion.
+- [x] Add a minimal smoke-test executable target.
+- [x] Add baseline profiling and telemetry hooks so the first smoke tests already report frame time, memory use, and timing metrics against the defined budgets.
+- [x] Add a starter game-mode build target or stub so extension workflow is exercised from the first bootstrap.
+- [x] Add a docs target or workflow for architecture notes and generated documentation.
 
 ### Phase 2 - Platform Layer and Application Shell
 
@@ -179,9 +179,9 @@ These are support libraries, not replacements for SDL or bgfx.
 ### Phase 3 - Foundation, World, Mode Host, and Runtime Contracts
 
 - [ ] Create foundational utilities for IDs, handles, lifetime tracking, and ownership-safe resource access.
-- [ ] Establish the composition root so subsystems are wired explicitly rather than through hidden globals.
-- [ ] Define a slim mode-host contract early, covering lifecycle, transport access, input surfaces, scoring callbacks, and render-extraction hooks.
-- [ ] Register modes through compile-time descriptors or factories rather than runtime plugin loading in version 1.
+- [x] Establish the composition root so subsystems are wired explicitly rather than through hidden globals.
+- [x] Define a slim mode-host contract early, covering lifecycle, transport access, input surfaces, scoring callbacks, and render-extraction hooks.
+- [x] Register modes through compile-time descriptors or factories rather than runtime plugin loading in version 1.
 - [ ] Add the world model using EnTT or an equivalent registry-backed approach.
 - [ ] Keep the shared world model intentionally small and push mode-specific spatial policy out of core runtime.
 - [ ] Create transform components and a transform propagation strategy that works for both 2D and 3D hierarchies.
@@ -192,7 +192,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [ ] Implement deterministic random number generation and seed management.
 - [ ] Add replay recording scaffolding for input streams and authoritative state checkpoints.
 - [ ] Build a minimal reference mode or sandbox that exercises lifecycle, input, transport stubs, and render extraction before the broader gameplay framework hardens.
-- [ ] Add a starter mode template that new games can copy without modifying engine internals.
+- [x] Add a starter mode template that new games can copy without modifying engine internals.
 
 ### Phase 4 - Rendering Foundation with bgfx
 

@@ -39,3 +39,14 @@
 
 # debug information files
 *.dwo
+
+# CMake and IDE outputs
+/build/
+/out/
+/compile_commands.json
+/CMakeUserPresets.json
+/.vs/
+
+# Generated runtime content
+/content/cooked/**
+!/content/cooked/.gitkeep

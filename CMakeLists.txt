@@ -1,0 +1,121 @@
+cmake_minimum_required(VERSION 3.25)
+
+project(Reaktio VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+option(REAKTIO_WARNINGS_AS_ERRORS "Treat warnings as errors for Reaktio targets." ON)
+option(REAKTIO_ENABLE_ASAN "Enable AddressSanitizer for Reaktio targets." OFF)
+option(REAKTIO_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for Reaktio targets." OFF)
+option(REAKTIO_ENABLE_CLANG_TIDY "Enable clang-tidy during builds for Reaktio targets." OFF)
+option(REAKTIO_ENABLE_CPPCHECK "Enable cppcheck during builds for Reaktio targets." OFF)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+include(ReaktioCompilerOptions)
+include(ReaktioSanitizers)
+include(ReaktioStaticAnalysis)
+include(ReaktioDependencies)
+include(ReaktioDevTargets)
+
+reaktio_configure_dependencies()
+
+function(reaktio_configure_target target_name)
+    target_compile_features(${target_name} PUBLIC cxx_std_20)
+    reaktio_apply_compiler_options(${target_name})
+    reaktio_enable_sanitizers(${target_name})
+    reaktio_enable_static_analysis(${target_name})
+endfunction()
+
+add_library(reaktio_foundation STATIC
+    engine/foundation/src/BuildInfo.cpp
+    engine/foundation/src/Telemetry.cpp
+)
+add_library(Reaktio::foundation ALIAS reaktio_foundation)
+target_include_directories(reaktio_foundation
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/foundation/include"
+)
+target_compile_definitions(reaktio_foundation
+    PUBLIC
+        REAKTIO_PROJECT_NAME="${PROJECT_NAME}"
+        REAKTIO_PROJECT_VERSION="${PROJECT_VERSION}"
+    REAKTIO_BUILD_CONFIGURATION="$<CONFIG>"
+)
+reaktio_configure_target(reaktio_foundation)
+
+add_library(reaktio_gameplay STATIC
+    engine/gameplay/src/GameModeRegistry.cpp
+)
+add_library(Reaktio::gameplay ALIAS reaktio_gameplay)
+target_include_directories(reaktio_gameplay
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/gameplay/include"
+)
+target_link_libraries(reaktio_gameplay PUBLIC Reaktio::foundation)
+reaktio_configure_target(reaktio_gameplay)
+
+add_library(reaktio_platform STATIC
+    engine/platform/src/StackProbe.cpp
+)
+add_library(Reaktio::platform ALIAS reaktio_platform)
+target_include_directories(reaktio_platform
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/platform/include"
+)
+target_link_libraries(reaktio_platform PUBLIC Reaktio::foundation SDL3::SDL3 bgfx)
+reaktio_configure_target(reaktio_platform)
+
+add_library(reaktio_starter_mode STATIC
+    games/templates/starter_mode/src/StarterMode.cpp
+)
+add_library(Reaktio::starter_mode ALIAS reaktio_starter_mode)
+target_include_directories(reaktio_starter_mode
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/games/templates/starter_mode/include"
+)
+target_link_libraries(reaktio_starter_mode PUBLIC Reaktio::foundation Reaktio::gameplay)
+reaktio_configure_target(reaktio_starter_mode)
+
+add_library(reaktio_app STATIC
+    engine/app/src/SmokeApplication.cpp
+)
+add_library(Reaktio::app ALIAS reaktio_app)
+target_include_directories(reaktio_app
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/app/include"
+)
+target_link_libraries(reaktio_app
+    PUBLIC
+        Reaktio::foundation
+        Reaktio::gameplay
+        Reaktio::platform
+)
+reaktio_configure_target(reaktio_app)
+
+add_executable(reaktio_smoke engine/app/src/main.cpp)
+target_link_libraries(reaktio_smoke PRIVATE Reaktio::app Reaktio::starter_mode)
+reaktio_configure_target(reaktio_smoke)
+
+if(TARGET shaderc AND TARGET texturec AND TARGET geometryc)
+    add_custom_target(reaktio-bootstrap-tools DEPENDS shaderc texturec geometryc)
+endif()
+
+if(WIN32 AND TARGET SDL3::SDL3-shared)
+    add_custom_command(
+        TARGET reaktio_smoke
+        POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                $<TARGET_FILE:SDL3::SDL3-shared>
+                $<TARGET_FILE_DIR:reaktio_smoke>
+        VERBATIM
+    )
+endif()
+
+reaktio_add_dev_targets()

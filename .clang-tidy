@@ -1,0 +1,13 @@
+Checks: >-
+  -*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  readability-avoid-const-params-in-decls,
+  readability-container-size-empty,
+  readability-implicit-bool-conversion,
+  readability-misleading-indentation,
+  readability-qualified-auto
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(engine|games)/'
+FormatStyle: file
