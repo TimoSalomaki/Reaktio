@@ -8,6 +8,7 @@
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/TransportStub.hpp"
+#include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/platform/FrameClock.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
@@ -53,6 +54,7 @@ class SmokeApplication final : public gameplay::IModeHost {
     [[nodiscard]] foundation::DeterministicRandomService& random_service() noexcept override;
     [[nodiscard]] gameplay::EventBus& event_bus() noexcept override;
     [[nodiscard]] gameplay::ReplayRecorder& replay() noexcept override;
+    [[nodiscard]] gameplay::WorldModel& world_model() noexcept override;
     [[nodiscard]] gameplay::ITransportControl& transport() noexcept override;
     [[nodiscard]] render::RenderExtractionContext& render_extraction() noexcept override;
     [[nodiscard]] foundation::TelemetryRecorder& telemetry() noexcept override;
@@ -68,6 +70,7 @@ class SmokeApplication final : public gameplay::IModeHost {
     foundation::DeterministicRandomService random_service_;
     gameplay::EventBus event_bus_;
     gameplay::ReplayRecorder replay_recorder_;
+    gameplay::WorldModel world_model_;
     gameplay::TransportStub transport_stub_;
     render::RenderExtractionContext render_extraction_context_;
     foundation::CrashSafeLog crash_safe_log_;

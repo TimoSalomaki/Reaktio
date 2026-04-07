@@ -37,6 +37,10 @@ add_library(reaktio_platform_api INTERFACE)
 add_library(Reaktio::platform_api ALIAS reaktio_platform_api)
 target_include_directories(reaktio_platform_api INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/engine/platform/include")
 
+add_library(reaktio_entt INTERFACE)
+add_library(Reaktio::entt ALIAS reaktio_entt)
+target_include_directories(reaktio_entt INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/external/entt/src")
+
 add_library(reaktio_render_api INTERFACE)
 add_library(Reaktio::render_api ALIAS reaktio_render_api)
 target_include_directories(reaktio_render_api INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/include")
@@ -65,13 +69,14 @@ add_library(reaktio_gameplay STATIC
     engine/gameplay/src/GameModeRegistry.cpp
     engine/gameplay/src/ReplayRecorder.cpp
     engine/gameplay/src/TransportStub.cpp
+    engine/gameplay/src/WorldModel.cpp
 )
 add_library(Reaktio::gameplay ALIAS reaktio_gameplay)
 target_include_directories(reaktio_gameplay
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/gameplay/include"
 )
-target_link_libraries(reaktio_gameplay PUBLIC Reaktio::foundation Reaktio::platform_api)
+target_link_libraries(reaktio_gameplay PUBLIC Reaktio::entt Reaktio::foundation Reaktio::platform_api)
 reaktio_configure_target(reaktio_gameplay)
 
 add_library(reaktio_platform STATIC

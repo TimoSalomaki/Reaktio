@@ -182,8 +182,8 @@ These are support libraries, not replacements for SDL or bgfx.
 - [x] Establish the composition root so subsystems are wired explicitly rather than through hidden globals.
 - [x] Define a slim mode-host contract early, covering lifecycle, transport access, input surfaces, scoring callbacks, and render-extraction hooks.
 - [x] Register modes through compile-time descriptors or factories rather than runtime plugin loading in version 1.
-- [ ] Add the world model using EnTT or an equivalent registry-backed approach.
-- [ ] Keep the shared world model intentionally small and push mode-specific spatial policy out of core runtime.
+- [x] Add the world model using EnTT or an equivalent registry-backed approach.
+- [x] Keep the shared world model intentionally small and push mode-specific spatial policy out of core runtime.
 - [ ] Create transform components and a transform propagation strategy that works for both 2D and 3D hierarchies.
 - [ ] Add lightweight movement and collision primitives suitable for deterministic rhythm gameplay.
 - [ ] Create a resource registry that separates authoring identifiers from runtime handles.

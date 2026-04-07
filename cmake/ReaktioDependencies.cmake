@@ -19,6 +19,10 @@ function(reaktio_configure_dependencies)
         message(FATAL_ERROR "Vendored bgfx is missing. Run tools/bootstrap-deps.ps1.")
     endif()
 
+    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/external/entt/src/entt/entt.hpp")
+        message(FATAL_ERROR "Vendored EnTT is missing. Run tools/bootstrap-deps.ps1.")
+    endif()
+
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
     set(SDL_TESTS OFF CACHE BOOL "" FORCE)

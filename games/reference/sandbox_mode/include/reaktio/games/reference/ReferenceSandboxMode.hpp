@@ -2,6 +2,7 @@
 
 #include "reaktio/gameplay/IGameMode.hpp"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace reaktio::games::reference {
@@ -20,6 +21,8 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::uint64_t fixed_steps_{};
     std::uint32_t transport_roll_{};
     std::uint32_t visual_roll_{};
+    std::size_t world_entity_count_{};
+    float average_phase_{};
 };
 
 } // namespace reaktio::games::reference

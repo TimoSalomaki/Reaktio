@@ -49,6 +49,7 @@ function(reaktio_add_dev_targets)
                 -I"${PROJECT_SOURCE_DIR}/games/templates/starter_mode/include"
                 -I"${PROJECT_SOURCE_DIR}/games/reference/sandbox_mode/include"
                 -I"${PROJECT_SOURCE_DIR}/external/SDL/include"
+                -I"${PROJECT_SOURCE_DIR}/external/entt/src"
                 -I"${PROJECT_SOURCE_DIR}/external/bgfx.cmake/bgfx/include"
                 -I"${PROJECT_SOURCE_DIR}/external/bgfx.cmake/bx/include"
                 -I"${PROJECT_SOURCE_DIR}/external/bgfx.cmake/bimg/include"

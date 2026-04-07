@@ -6,11 +6,14 @@
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/Transport.hpp"
+#include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/FrameClock.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 
+#include <algorithm>
+#include <array>
 #include <sstream>
 
 namespace reaktio::games::reference {
@@ -62,6 +65,90 @@ std::uint64_t make_state_hash(
     return hash;
 }
 
+struct SandboxSpatialCue {
+    float x{};
+    float y{};
+    float velocity_x{};
+};
+
+struct SandboxPulseCue {
+    float phase{};
+    float phase_velocity{};
+};
+
+struct SandboxLaneCue {
+    std::uint32_t lane_index{};
+};
+
+void seed_world(gameplay::IModeHost& host) {
+    gameplay::WorldModel& world = host.world_model();
+
+    constexpr std::array<float, 3> k_spawn_x{-240.0f, 0.0f, 240.0f};
+    constexpr std::array<float, 3> k_velocity_x{12.0f, -6.0f, 9.0f};
+    constexpr std::array<float, 3> k_phase_velocity{0.07f, 0.11f, 0.05f};
+
+    for (std::size_t index = 0; index < k_spawn_x.size(); ++index) {
+        const gameplay::WorldEntity entity = world.create_entity("reference.sandbox.cue");
+        world.emplace<SandboxSpatialCue>(
+            entity,
+            SandboxSpatialCue{
+                .x = k_spawn_x[index],
+                .y = -120.0f + static_cast<float>(index) * 120.0f,
+                .velocity_x = k_velocity_x[index],
+            });
+        world.emplace<SandboxPulseCue>(
+            entity,
+            SandboxPulseCue{
+                .phase = static_cast<float>(index) * 0.25f,
+                .phase_velocity = k_phase_velocity[index],
+            });
+        world.emplace<SandboxLaneCue>(entity, SandboxLaneCue{.lane_index = static_cast<std::uint32_t>(index)});
+    }
+}
+
+void update_world(gameplay::WorldModel& world) {
+    world.for_each<SandboxSpatialCue, SandboxPulseCue>([](gameplay::WorldEntity, SandboxSpatialCue& spatial, SandboxPulseCue& pulse) {
+        spatial.x += spatial.velocity_x;
+        if (spatial.x > 320.0f) {
+            spatial.x = -320.0f;
+        } else if (spatial.x < -320.0f) {
+            spatial.x = 320.0f;
+        }
+
+        pulse.phase += pulse.phase_velocity;
+        if (pulse.phase >= 1.0f) {
+            pulse.phase -= 1.0f;
+        }
+    });
+}
+
+float sample_average_phase(const gameplay::WorldModel& world) {
+    float total_phase = 0.0f;
+    std::size_t count = 0;
+    world.for_each<SandboxPulseCue>([&](gameplay::WorldEntity, const SandboxPulseCue& pulse) {
+        total_phase += pulse.phase;
+        ++count;
+    });
+    return count > 0 ? total_phase / static_cast<float>(count) : 0.0f;
+}
+
+std::string sample_first_label(const gameplay::WorldModel& world) {
+    std::string label{"none"};
+    bool assigned = false;
+    world.for_each<gameplay::EntityName, SandboxLaneCue>(
+        [&](gameplay::WorldEntity, const gameplay::EntityName& entity_name, const SandboxLaneCue& lane) {
+            if (assigned) {
+                return;
+            }
+
+            std::ostringstream stream;
+            stream << entity_name.value << ":lane" << lane.lane_index;
+            label = stream.str();
+            assigned = true;
+        });
+    return label;
+}
+
 void publish_transport_event(
     gameplay::IModeHost& host,
     std::string_view action,
@@ -110,6 +197,12 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     fixed_steps_ = 0;
     transport_roll_ = 0;
     visual_roll_ = 0;
+    average_phase_ = 0.0f;
+    world_entity_count_ = 0;
+
+    seed_world(host);
+    world_entity_count_ = host.world_model().entity_count();
+    average_phase_ = sample_average_phase(host.world_model());
 
     gameplay::ITransportControl& transport = host.transport();
     transport.stop();
@@ -134,6 +227,13 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         "enter",
         fixed_steps_,
         make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_));
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps_,
+        gameplay::DiagnosticEvent{
+            .message = "world seeded entities=" + std::to_string(world_entity_count_),
+        });
 }
 
 void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
@@ -171,6 +271,9 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
     const std::uint64_t checkpoint_hash =
         make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_);
+    update_world(host.world_model());
+    world_entity_count_ = host.world_model().entity_count();
+    average_phase_ = sample_average_phase(host.world_model());
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
@@ -252,6 +355,11 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     event_stream << "events=" << event_bus.published_count() << '/' << event_bus.count() << " last="
                  << (last_event != nullptr ? gameplay::describe_event(*last_event) : std::string("none"));
     host.render_extraction().add_debug_text(0, 13, 0x0b, event_stream.str());
+
+    std::ostringstream world_stream;
+    world_stream << "world entities=" << world_entity_count_ << " phase=" << average_phase_
+                 << " sample=" << sample_first_label(host.world_model());
+    host.render_extraction().add_debug_text(0, 14, 0x0f, world_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
@@ -271,6 +379,13 @@ void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
     });
     publish_transport_event(host, "exit-stop", fixed_steps_, transport_snapshot);
     publish_replay_checkpoint_event(host, "exit", fixed_steps_, checkpoint_hash);
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps_,
+        gameplay::DiagnosticEvent{
+            .message = "world exiting entities=" + std::to_string(host.world_model().entity_count()),
+        });
 }
 
 } // namespace reaktio::games::reference

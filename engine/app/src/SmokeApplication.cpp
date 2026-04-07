@@ -107,6 +107,7 @@ int SmokeApplication::run() {
             std::string(mode->descriptor().id) + ")");
 
     event_bus_.reset();
+    world_model_.reset();
     replay_recorder_.begin_session(gameplay::ReplaySessionMetadata{
         .mode_id = std::string(mode->descriptor().id),
         .mode_display_name = std::string(mode->descriptor().display_name),
@@ -206,6 +207,12 @@ int SmokeApplication::run() {
     active_shell_ = nullptr;
 
     {
+        std::ostringstream world_stream;
+        world_stream << "World model: entities=" << world_model_.entity_count();
+        crash_safe_log_.write(foundation::LogLevel::Info, world_stream.str());
+    }
+
+    {
         std::ostringstream replay_stream;
         replay_stream << "Replay capture: inputs=" << replay_recorder_.input_frame_count() << " checkpoints="
                       << replay_recorder_.checkpoint_count();
@@ -224,6 +231,8 @@ int SmokeApplication::run() {
         }
         crash_safe_log_.write(foundation::LogLevel::Info, event_stream.str());
     }
+
+    world_model_.reset();
 
     if (const foundation::TelemetrySnapshot* snapshot = telemetry_recorder_.last()) {
         crash_safe_log_.write(
@@ -271,6 +280,10 @@ gameplay::EventBus& SmokeApplication::event_bus() noexcept {
 
 gameplay::ReplayRecorder& SmokeApplication::replay() noexcept {
     return replay_recorder_;
+}
+
+gameplay::WorldModel& SmokeApplication::world_model() noexcept {
+    return world_model_;
 }
 
 gameplay::ITransportControl& SmokeApplication::transport() noexcept {
