@@ -2,6 +2,7 @@
 
 #include "reaktio/foundation/DeterministicRandom.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
+#include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/Transport.hpp"
@@ -61,6 +62,40 @@ std::uint64_t make_state_hash(
     return hash;
 }
 
+void publish_transport_event(
+    gameplay::IModeHost& host,
+    std::string_view action,
+    std::uint64_t fixed_steps,
+    const gameplay::TransportSnapshot& transport_snapshot) {
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::TransportEvent{
+            .action = std::string(action),
+            .playback_state = transport_snapshot.playback_state,
+            .position_seconds = transport_snapshot.position_seconds,
+            .loop_enabled = transport_snapshot.loop_region.enabled,
+        });
+}
+
+void publish_replay_checkpoint_event(
+    gameplay::IModeHost& host,
+    std::string_view label,
+    std::uint64_t fixed_steps,
+    std::uint64_t authoritative_state_hash) {
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::ReplayCheckpointEvent{
+            .label = std::string(label),
+            .simulation_step = fixed_steps,
+            .authoritative_state_hash = authoritative_state_hash,
+            .checkpoint_count = host.replay().checkpoint_count(),
+        });
+}
+
 } // namespace
 
 const gameplay::ModeDescriptor& ReferenceSandboxMode::mode_descriptor() noexcept {
@@ -93,6 +128,12 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         .label = "enter",
         .summary = "reference sandbox entered and initialized transport loop region",
     });
+    publish_transport_event(host, "enter-play", fixed_steps_, transport_snapshot);
+    publish_replay_checkpoint_event(
+        host,
+        "enter",
+        fixed_steps_,
+        make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_));
 }
 
 void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
@@ -106,31 +147,42 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
     visual_roll_ = visual_rng.next_u32(0u, 255u);
 
     gameplay::ITransportControl& transport = host.transport();
+    std::string_view action = "tick";
     if (fixed_steps_ == 2) {
         transport.pause();
+        action = "pause";
     } else if (fixed_steps_ == 3) {
         transport.seek(0.50);
+        action = "seek";
     } else if (fixed_steps_ == 4) {
         transport.play();
+        action = "play";
     } else if (fixed_steps_ == 5) {
         transport.clear_loop_region();
+        action = "clear-loop";
     } else if (fixed_steps_ == 6) {
         transport.set_loop_region(1.0, 1.4);
+        action = "set-loop";
     } else if (fixed_steps_ == 7) {
         transport.restart();
+        action = "restart";
     }
 
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    const std::uint64_t checkpoint_hash =
+        make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
         .transport_state = transport_snapshot.playback_state,
         .transport_position_seconds = transport_snapshot.position_seconds,
         .root_random_seed = host.random_service().root_seed(),
-        .authoritative_state_hash = make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_),
+        .authoritative_state_hash = checkpoint_hash,
         .label = "fixed-step",
         .summary = "sandbox transport/RNG state checkpoint",
     });
+    publish_transport_event(host, action, fixed_steps_, transport_snapshot);
+    publish_replay_checkpoint_event(host, "fixed-step", fixed_steps_, checkpoint_hash);
 
     foundation::TelemetrySnapshot snapshot{};
     snapshot.audio_drift_ms = 0.00;
@@ -145,6 +197,8 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     const foundation::DeterministicRandomService& random_service = host.random_service();
     const foundation::DeterministicRng* transport_rng = random_service.find_stream("reference-sandbox.transport");
     const foundation::DeterministicRng* visual_rng = random_service.find_stream("reference-sandbox.visual");
+    const gameplay::EventBus& event_bus = host.event_bus();
+    const gameplay::EventRecord* last_event = event_bus.last();
     const gameplay::ReplayRecorder& replay_recorder = host.replay();
     const gameplay::ReplayCheckpoint* last_checkpoint = replay_recorder.last_checkpoint();
 
@@ -193,21 +247,30 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                   << replay_recorder.checkpoint_count() << " last="
                   << (last_checkpoint != nullptr ? last_checkpoint->label : std::string_view("none"));
     host.render_extraction().add_debug_text(0, 12, 0x0c, replay_stream.str());
+
+    std::ostringstream event_stream;
+    event_stream << "events=" << event_bus.published_count() << '/' << event_bus.count() << " last="
+                 << (last_event != nullptr ? gameplay::describe_event(*last_event) : std::string("none"));
+    host.render_extraction().add_debug_text(0, 13, 0x0b, event_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
     host.transport().stop();
     const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
+    const std::uint64_t checkpoint_hash =
+        make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
         .transport_state = transport_snapshot.playback_state,
         .transport_position_seconds = transport_snapshot.position_seconds,
         .root_random_seed = host.random_service().root_seed(),
-        .authoritative_state_hash = make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_),
+        .authoritative_state_hash = checkpoint_hash,
         .label = "exit",
         .summary = "reference sandbox exit state after transport stop",
     });
+    publish_transport_event(host, "exit-stop", fixed_steps_, transport_snapshot);
+    publish_replay_checkpoint_event(host, "exit", fixed_steps_, checkpoint_hash);
 }
 
 } // namespace reaktio::games::reference

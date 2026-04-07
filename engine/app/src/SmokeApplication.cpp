@@ -106,13 +106,30 @@ int SmokeApplication::run() {
         std::string("Running mode: ") + std::string(mode->descriptor().display_name) + " (" +
             std::string(mode->descriptor().id) + ")");
 
+    event_bus_.reset();
     replay_recorder_.begin_session(gameplay::ReplaySessionMetadata{
         .mode_id = std::string(mode->descriptor().id),
         .mode_display_name = std::string(mode->descriptor().display_name),
         .root_random_seed = random_service_.root_seed(),
     });
 
+    event_bus_.publish(
+        "app.smoke",
+        frame_timing().frame_index,
+        0,
+        gameplay::ModeLifecycleEvent{
+            .mode_id = std::string(mode->descriptor().id),
+            .phase = gameplay::ModeLifecyclePhase::Entering,
+        });
     mode->on_enter(*this);
+    event_bus_.publish(
+        "app.smoke",
+        frame_timing().frame_index,
+        0,
+        gameplay::ModeLifecycleEvent{
+            .mode_id = std::string(mode->descriptor().id),
+            .phase = gameplay::ModeLifecyclePhase::Entered,
+        });
 
     while (!platform_shell.should_quit()) {
         platform_shell.begin_frame();
@@ -169,7 +186,23 @@ int SmokeApplication::run() {
         }
     }
 
+    event_bus_.publish(
+        "app.smoke",
+        frame_timing().frame_index,
+        0,
+        gameplay::ModeLifecycleEvent{
+            .mode_id = std::string(mode->descriptor().id),
+            .phase = gameplay::ModeLifecyclePhase::Exiting,
+        });
     mode->on_exit(*this);
+    event_bus_.publish(
+        "app.smoke",
+        frame_timing().frame_index,
+        0,
+        gameplay::ModeLifecycleEvent{
+            .mode_id = std::string(mode->descriptor().id),
+            .phase = gameplay::ModeLifecyclePhase::Exited,
+        });
     active_shell_ = nullptr;
 
     {
@@ -180,6 +213,16 @@ int SmokeApplication::run() {
             replay_stream << " last=" << checkpoint->label;
         }
         crash_safe_log_.write(foundation::LogLevel::Info, replay_stream.str());
+    }
+
+    {
+        std::ostringstream event_stream;
+        event_stream << "Event bus: messages=" << event_bus_.published_count()
+                     << " retained=" << event_bus_.count();
+        if (const gameplay::EventRecord* event = event_bus_.last()) {
+            event_stream << " last=" << gameplay::describe_event(*event);
+        }
+        crash_safe_log_.write(foundation::LogLevel::Info, event_stream.str());
     }
 
     if (const foundation::TelemetrySnapshot* snapshot = telemetry_recorder_.last()) {
@@ -220,6 +263,10 @@ const platform::WindowState& SmokeApplication::window_state() const noexcept {
 
 foundation::DeterministicRandomService& SmokeApplication::random_service() noexcept {
     return random_service_;
+}
+
+gameplay::EventBus& SmokeApplication::event_bus() noexcept {
+    return event_bus_;
 }
 
 gameplay::ReplayRecorder& SmokeApplication::replay() noexcept {

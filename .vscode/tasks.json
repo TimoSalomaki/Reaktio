@@ -36,6 +36,30 @@
 			],
 			"isBackground": false,
 			"group": "test"
+		},
+		{
+			"label": "verify-smoke-event-bus-review",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"cmake --build --preset build-debug --target reaktio_smoke; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & \"$PWD/build/debug/Debug/reaktio_smoke.exe\"; Write-Output \"exit:$LASTEXITCODE\""
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "verify-smoke-event-bus-review-final",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"cmake --build --preset build-debug --target reaktio_smoke; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & \"$PWD/build/debug/Debug/reaktio_smoke.exe\"; Write-Output \"exit:$LASTEXITCODE\""
+			],
+			"isBackground": false,
+			"group": "test"
 		}
 	]
 }

@@ -61,6 +61,7 @@ target_compile_definitions(reaktio_foundation
 reaktio_configure_target(reaktio_foundation)
 
 add_library(reaktio_gameplay STATIC
+    engine/gameplay/src/EventBus.cpp
     engine/gameplay/src/GameModeRegistry.cpp
     engine/gameplay/src/ReplayRecorder.cpp
     engine/gameplay/src/TransportStub.cpp
