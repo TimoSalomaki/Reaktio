@@ -25,6 +25,7 @@ int main() {
         reaktio::foundation::make_bootstrap_budget(),
         std::move(application_config),
         std::string(reaktio::games::reference::ReferenceSandboxMode::mode_descriptor().id),
+        0x5245414b54494f32ull,
         reaktio::platform::capture_stack_probe(),
         std::move(game_mode_registry),
         &std::cout,

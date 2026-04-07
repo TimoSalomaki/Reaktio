@@ -44,6 +44,7 @@ target_include_directories(reaktio_render_api INTERFACE "${CMAKE_CURRENT_SOURCE_
 add_library(reaktio_foundation STATIC
     engine/foundation/src/BuildInfo.cpp
     engine/foundation/src/CrashSafeLog.cpp
+    engine/foundation/src/DeterministicRandom.cpp
     engine/foundation/src/Telemetry.cpp
 )
 add_library(Reaktio::foundation ALIAS reaktio_foundation)

@@ -25,7 +25,8 @@ double milliseconds_between(
 namespace reaktio::app {
 
 SmokeApplication::SmokeApplication(SmokeApplicationDependencies dependencies)
-    : dependencies_(std::move(dependencies)) {}
+        : dependencies_(std::move(dependencies)),
+            random_service_(dependencies_.random_seed) {}
 
 int SmokeApplication::run() {
     crash_safe_log_.attach_mirror_stream(dependencies_.log_stream);
@@ -200,6 +201,10 @@ const platform::WindowState& SmokeApplication::window_state() const noexcept {
     return active_shell_->window_state();
 }
 
+foundation::DeterministicRandomService& SmokeApplication::random_service() noexcept {
+    return random_service_;
+}
+
 gameplay::ITransportControl& SmokeApplication::transport() noexcept {
     return transport_stub_;
 }
@@ -263,6 +268,11 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
     crash_safe_log_.write(
         foundation::LogLevel::Info,
         "  fixed step: " + std::to_string(dependencies_.application_config.main_loop.fixed_step_seconds) + " s");
+    {
+        std::ostringstream seed_stream;
+        seed_stream << "  random seed: 0x" << std::hex << dependencies_.random_seed;
+        crash_safe_log_.write(foundation::LogLevel::Info, seed_stream.str());
+    }
     if (!dependencies_.startup_mode_id.empty()) {
         crash_safe_log_.write(
             foundation::LogLevel::Info,

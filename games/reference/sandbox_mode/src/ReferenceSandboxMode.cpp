@@ -1,5 +1,6 @@
 #include "reaktio/games/reference/ReferenceSandboxMode.hpp"
 
+#include "reaktio/foundation/DeterministicRandom.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/Transport.hpp"
@@ -32,6 +33,14 @@ std::uint32_t state_color(gameplay::TransportPlaybackState playback_state) noexc
     return 0x16324cff;
 }
 
+std::uint32_t mix_visual_color(gameplay::TransportPlaybackState playback_state, std::uint32_t visual_roll) noexcept {
+    const std::uint32_t base = state_color(playback_state);
+    const std::uint32_t red = (base >> 24u) & 0xffu;
+    const std::uint32_t green = (base >> 16u) & 0xffu;
+    const std::uint32_t blue = 0x20u + (visual_roll % 0xa0u);
+    return (red << 24u) | (green << 16u) | (blue << 8u) | 0xffu;
+}
+
 } // namespace
 
 const gameplay::ModeDescriptor& ReferenceSandboxMode::mode_descriptor() noexcept {
@@ -44,15 +53,26 @@ const gameplay::ModeDescriptor& ReferenceSandboxMode::descriptor() const noexcep
 
 void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     fixed_steps_ = 0;
+    transport_roll_ = 0;
+    visual_roll_ = 0;
 
     gameplay::ITransportControl& transport = host.transport();
     transport.stop();
     transport.set_loop_region(0.75, 1.25);
     transport.play();
+
+    host.random_service().reset_streams();
 }
 
 void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
     ++fixed_steps_;
+
+    foundation::DeterministicRng& transport_rng =
+        host.random_service().stream("reference-sandbox.transport");
+    foundation::DeterministicRng& visual_rng =
+        host.random_service().stream("reference-sandbox.visual");
+    transport_roll_ = transport_rng.next_u32(0u, 9999u);
+    visual_roll_ = visual_rng.next_u32(0u, 255u);
 
     gameplay::ITransportControl& transport = host.transport();
     if (fixed_steps_ == 2) {
@@ -79,6 +99,9 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
 void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) {
     const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
     const platform::InputSnapshot& input_snapshot = host.input_snapshot();
+    const foundation::DeterministicRandomService& random_service = host.random_service();
+    const foundation::DeterministicRng* transport_rng = random_service.find_stream("reference-sandbox.transport");
+    const foundation::DeterministicRng* visual_rng = random_service.find_stream("reference-sandbox.visual");
 
     host.render_extraction().set_view_camera(
         reaktio::render::RenderView::MainScene,
@@ -89,7 +112,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
             .near_plane = 0.0f,
             .far_plane = 100.0f,
         });
-    host.render_extraction().set_main_scene_clear(state_color(transport_snapshot.playback_state));
+    host.render_extraction().set_main_scene_clear(mix_visual_color(transport_snapshot.playback_state, visual_roll_));
 
     std::ostringstream state_stream;
     state_stream << "transport=" << gameplay::to_string(transport_snapshot.playback_state) << " pos="
@@ -111,6 +134,14 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                  << input_snapshot.text_input_events().size() << " gamepads="
                  << input_snapshot.connected_gamepads().size();
     host.render_extraction().add_debug_text(0, 10, 0x0a, input_stream.str());
+
+    std::ostringstream rng_stream;
+    rng_stream << "rng root=0x" << std::hex << random_service.root_seed() << std::dec
+               << " streams=" << random_service.stream_count() << " transport-roll="
+               << transport_roll_ << " visual-roll=" << visual_roll_ << " draws="
+               << (transport_rng != nullptr ? transport_rng->generated_values() : 0) << '/'
+               << (visual_rng != nullptr ? visual_rng->generated_values() : 0);
+    host.render_extraction().add_debug_text(0, 11, 0x0d, rng_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {

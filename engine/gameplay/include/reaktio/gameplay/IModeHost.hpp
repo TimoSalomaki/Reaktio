@@ -1,6 +1,7 @@
 #pragma once
 
 namespace reaktio::foundation {
+class DeterministicRandomService;
 class TelemetryRecorder;
 struct RuntimeBudget;
 } // namespace reaktio::foundation
@@ -31,6 +32,7 @@ class IModeHost {
     [[nodiscard]] virtual const platform::InputSnapshot& input_snapshot() const noexcept = 0;
     [[nodiscard]] virtual const platform::FrameTiming& frame_timing() const noexcept = 0;
     [[nodiscard]] virtual const platform::WindowState& window_state() const noexcept = 0;
+    [[nodiscard]] virtual foundation::DeterministicRandomService& random_service() noexcept = 0;
     [[nodiscard]] virtual ITransportControl& transport() noexcept = 0;
     [[nodiscard]] virtual render::RenderExtractionContext& render_extraction() noexcept = 0;
     [[nodiscard]] virtual foundation::TelemetryRecorder& telemetry() noexcept = 0;

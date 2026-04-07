@@ -18,6 +18,8 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
 
   private:
     std::uint64_t fixed_steps_{};
+    std::uint32_t transport_roll_{};
+    std::uint32_t visual_roll_{};
 };
 
 } // namespace reaktio::games::reference

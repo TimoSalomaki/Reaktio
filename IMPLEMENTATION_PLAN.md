@@ -189,7 +189,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [ ] Create a resource registry that separates authoring identifiers from runtime handles.
 - [ ] Add configuration loading for engine settings, input bindings, and mode configuration.
 - [ ] Add an event or messaging strategy for subsystem communication without tight coupling.
-- [ ] Implement deterministic random number generation and seed management.
+- [x] Implement deterministic random number generation and seed management.
 - [ ] Add replay recording scaffolding for input streams and authoritative state checkpoints.
 - [x] Build a minimal reference mode or sandbox that exercises lifecycle, input, transport stubs, and render extraction before the broader gameplay framework hardens.
 - [x] Add a starter mode template that new games can copy without modifying engine internals.
