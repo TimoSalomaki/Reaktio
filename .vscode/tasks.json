@@ -1,0 +1,41 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "verify-smoke-replay-review",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"cmake --build --preset build-debug --target reaktio_smoke; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & \"$PWD/build/debug/Debug/reaktio_smoke.exe\"; Write-Output \"exit:$LASTEXITCODE\""
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "verify-smoke-replay-review",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"cmake --build --preset build-debug --target reaktio_smoke; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & \"$PWD/build/debug/Debug/reaktio_smoke.exe\"; Write-Output \"exit:$LASTEXITCODE\""
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "verify-smoke-replay-lifecycle",
+			"type": "shell",
+			"command": "pwsh",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"cmake --build --preset build-debug --target reaktio_smoke; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & \"$PWD/build/debug/Debug/reaktio_smoke.exe\"; Write-Output \"exit:$LASTEXITCODE\""
+			],
+			"isBackground": false,
+			"group": "test"
+		}
+	]
+}

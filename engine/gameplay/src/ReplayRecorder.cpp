@@ -1,5 +1,7 @@
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 
+#include "reaktio/platform/FrameClock.hpp"
+
 #include <utility>
 
 namespace reaktio::gameplay {

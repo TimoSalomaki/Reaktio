@@ -5,6 +5,7 @@
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/Transport.hpp"
+#include "reaktio/platform/FrameClock.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
@@ -81,13 +82,14 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     transport.play();
 
     host.random_service().reset_streams();
+    const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
-        .transport_state = transport.snapshot().playback_state,
-        .transport_position_seconds = transport.snapshot().position_seconds,
+        .transport_state = transport_snapshot.playback_state,
+        .transport_position_seconds = transport_snapshot.position_seconds,
         .root_random_seed = host.random_service().root_seed(),
-        .authoritative_state_hash = 0,
+        .authoritative_state_hash = make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_),
         .label = "enter",
         .summary = "reference sandbox entered and initialized transport loop region",
     });
@@ -195,6 +197,17 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
     host.transport().stop();
+    const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
+    host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
+        .frame_index = host.frame_timing().frame_index,
+        .simulation_step = fixed_steps_,
+        .transport_state = transport_snapshot.playback_state,
+        .transport_position_seconds = transport_snapshot.position_seconds,
+        .root_random_seed = host.random_service().root_seed(),
+        .authoritative_state_hash = make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_),
+        .label = "exit",
+        .summary = "reference sandbox exit state after transport stop",
+    });
 }
 
 } // namespace reaktio::games::reference

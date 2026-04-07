@@ -14,6 +14,7 @@
 #include "reaktio/platform/StackProbe.hpp"
 #include "reaktio/platform/WindowState.hpp"
 
+#include <cstdint>
 #include <iosfwd>
 #include <string>
 
@@ -30,8 +31,8 @@ namespace reaktio::app {
 struct SmokeApplicationDependencies {
     foundation::RuntimeBudget runtime_budget;
     platform::ApplicationConfig application_config;
-  std::string startup_mode_id;
-  std::uint64_t random_seed{foundation::k_default_random_seed};
+    std::string startup_mode_id;
+    std::uint64_t random_seed{foundation::k_default_random_seed};
     platform::StackProbe stack_probe;
     gameplay::GameModeRegistry game_mode_registry;
     std::ostream* log_stream{};

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "reaktio/gameplay/Transport.hpp"
-#include "reaktio/platform/FrameClock.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 
 #include <cstddef>
@@ -9,6 +8,10 @@
 #include <deque>
 #include <string>
 #include <vector>
+
+namespace reaktio::platform {
+struct FrameTiming;
+} // namespace reaktio::platform
 
 namespace reaktio::gameplay {
 
