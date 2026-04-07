@@ -191,7 +191,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [ ] Add an event or messaging strategy for subsystem communication without tight coupling.
 - [ ] Implement deterministic random number generation and seed management.
 - [ ] Add replay recording scaffolding for input streams and authoritative state checkpoints.
-- [ ] Build a minimal reference mode or sandbox that exercises lifecycle, input, transport stubs, and render extraction before the broader gameplay framework hardens.
+- [x] Build a minimal reference mode or sandbox that exercises lifecycle, input, transport stubs, and render extraction before the broader gameplay framework hardens.
 - [x] Add a starter mode template that new games can copy without modifying engine internals.
 
 ### Phase 4 - Rendering Foundation with bgfx

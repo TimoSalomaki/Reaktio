@@ -61,6 +61,7 @@ reaktio_configure_target(reaktio_foundation)
 
 add_library(reaktio_gameplay STATIC
     engine/gameplay/src/GameModeRegistry.cpp
+    engine/gameplay/src/TransportStub.cpp
 )
 add_library(Reaktio::gameplay ALIAS reaktio_gameplay)
 target_include_directories(reaktio_gameplay
@@ -111,6 +112,24 @@ target_link_libraries(reaktio_starter_mode PUBLIC Reaktio::foundation Reaktio::g
 target_link_libraries(reaktio_starter_mode PUBLIC Reaktio::platform_api Reaktio::render_api)
 reaktio_configure_target(reaktio_starter_mode)
 
+add_library(reaktio_reference_sandbox_mode STATIC
+    games/reference/sandbox_mode/src/ReferenceSandboxMode.cpp
+)
+add_library(Reaktio::reference_sandbox_mode ALIAS reaktio_reference_sandbox_mode)
+target_include_directories(reaktio_reference_sandbox_mode
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/games/reference/sandbox_mode/include"
+)
+target_link_libraries(
+    reaktio_reference_sandbox_mode
+    PUBLIC
+        Reaktio::foundation
+        Reaktio::gameplay
+        Reaktio::platform_api
+        Reaktio::render_api
+)
+reaktio_configure_target(reaktio_reference_sandbox_mode)
+
 add_library(reaktio_app STATIC
     engine/app/src/SmokeApplication.cpp
 )
@@ -129,7 +148,13 @@ target_link_libraries(reaktio_app
 reaktio_configure_target(reaktio_app)
 
 add_executable(reaktio_smoke engine/app/src/main.cpp)
-target_link_libraries(reaktio_smoke PRIVATE Reaktio::app Reaktio::starter_mode)
+target_link_libraries(
+    reaktio_smoke
+    PRIVATE
+        Reaktio::app
+        Reaktio::starter_mode
+        Reaktio::reference_sandbox_mode
+)
 reaktio_configure_target(reaktio_smoke)
 
 if(TARGET shaderc AND TARGET texturec AND TARGET geometryc)

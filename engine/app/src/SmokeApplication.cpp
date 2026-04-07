@@ -80,7 +80,20 @@ int SmokeApplication::run() {
         crash_safe_log_.write(foundation::LogLevel::Info, render_stream.str());
     }
 
-    std::unique_ptr<gameplay::IGameMode> mode = dependencies_.game_mode_registry.create_first();
+    std::unique_ptr<gameplay::IGameMode> mode;
+    if (!dependencies_.startup_mode_id.empty()) {
+        mode = dependencies_.game_mode_registry.create_by_id(dependencies_.startup_mode_id);
+        if (!mode) {
+            crash_safe_log_.write(
+                foundation::LogLevel::Error,
+                "Requested startup mode is not registered: " + dependencies_.startup_mode_id);
+            active_shell_ = nullptr;
+            return 1;
+        }
+    } else {
+        mode = dependencies_.game_mode_registry.create_first();
+    }
+
     if (!mode) {
         crash_safe_log_.write(foundation::LogLevel::Error, "No game modes are registered.");
         active_shell_ = nullptr;
@@ -107,6 +120,7 @@ int SmokeApplication::run() {
         while (platform_shell.frame_clock().should_run_fixed_step()) {
             const auto simulation_start = std::chrono::steady_clock::now();
             mode->on_fixed_step(*this, platform_shell.frame_timing().fixed_step_seconds);
+            transport_stub_.advance(platform_shell.frame_timing().fixed_step_seconds);
             const auto simulation_end = std::chrono::steady_clock::now();
             simulation_ms += milliseconds_between(simulation_start, simulation_end);
             platform_shell.frame_clock().consume_fixed_step();
@@ -186,6 +200,10 @@ const platform::WindowState& SmokeApplication::window_state() const noexcept {
     return active_shell_->window_state();
 }
 
+gameplay::ITransportControl& SmokeApplication::transport() noexcept {
+    return transport_stub_;
+}
+
 render::RenderExtractionContext& SmokeApplication::render_extraction() noexcept {
     return render_extraction_context_;
 }
@@ -245,6 +263,11 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
     crash_safe_log_.write(
         foundation::LogLevel::Info,
         "  fixed step: " + std::to_string(dependencies_.application_config.main_loop.fixed_step_seconds) + " s");
+    if (!dependencies_.startup_mode_id.empty()) {
+        crash_safe_log_.write(
+            foundation::LogLevel::Info,
+            "  startup mode: " + dependencies_.startup_mode_id);
+    }
 }
 
 void SmokeApplication::log_window_state() {

@@ -4,6 +4,7 @@
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/GameModeRegistry.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
+#include "reaktio/gameplay/TransportStub.hpp"
 #include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/platform/FrameClock.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
@@ -12,6 +13,7 @@
 #include "reaktio/platform/WindowState.hpp"
 
 #include <iosfwd>
+#include <string>
 
 namespace reaktio::foundation {
 struct BuildInfo;
@@ -26,6 +28,7 @@ namespace reaktio::app {
 struct SmokeApplicationDependencies {
     foundation::RuntimeBudget runtime_budget;
     platform::ApplicationConfig application_config;
+  std::string startup_mode_id;
     platform::StackProbe stack_probe;
     gameplay::GameModeRegistry game_mode_registry;
     std::ostream* log_stream{};
@@ -42,6 +45,7 @@ class SmokeApplication final : public gameplay::IModeHost {
     [[nodiscard]] const platform::InputSnapshot& input_snapshot() const noexcept override;
     [[nodiscard]] const platform::FrameTiming& frame_timing() const noexcept override;
     [[nodiscard]] const platform::WindowState& window_state() const noexcept override;
+    [[nodiscard]] gameplay::ITransportControl& transport() noexcept override;
     [[nodiscard]] render::RenderExtractionContext& render_extraction() noexcept override;
     [[nodiscard]] foundation::TelemetryRecorder& telemetry() noexcept override;
     void request_quit() noexcept override;
@@ -53,6 +57,7 @@ class SmokeApplication final : public gameplay::IModeHost {
 
     SmokeApplicationDependencies dependencies_;
     foundation::TelemetryRecorder telemetry_recorder_;
+    gameplay::TransportStub transport_stub_;
     render::RenderExtractionContext render_extraction_context_;
     foundation::CrashSafeLog crash_safe_log_;
     platform::SdlApplicationShell* active_shell_{};
