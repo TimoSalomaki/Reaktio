@@ -3,6 +3,7 @@
 #include "reaktio/foundation/DeterministicRandom.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
+#include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/Transport.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
@@ -41,6 +42,24 @@ std::uint32_t mix_visual_color(gameplay::TransportPlaybackState playback_state, 
     return (red << 24u) | (green << 16u) | (blue << 8u) | 0xffu;
 }
 
+std::uint64_t make_state_hash(
+    std::uint64_t fixed_steps,
+    const gameplay::TransportSnapshot& transport_snapshot,
+    std::uint32_t transport_roll,
+    std::uint32_t visual_roll) noexcept {
+    std::uint64_t hash = 14695981039346656037ull;
+    hash ^= fixed_steps;
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.playback_state);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.position_seconds * 1000000.0);
+    hash *= 1099511628211ull;
+    hash ^= transport_roll;
+    hash *= 1099511628211ull;
+    hash ^= visual_roll;
+    return hash;
+}
+
 } // namespace
 
 const gameplay::ModeDescriptor& ReferenceSandboxMode::mode_descriptor() noexcept {
@@ -62,6 +81,16 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     transport.play();
 
     host.random_service().reset_streams();
+    host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
+        .frame_index = host.frame_timing().frame_index,
+        .simulation_step = fixed_steps_,
+        .transport_state = transport.snapshot().playback_state,
+        .transport_position_seconds = transport.snapshot().position_seconds,
+        .root_random_seed = host.random_service().root_seed(),
+        .authoritative_state_hash = 0,
+        .label = "enter",
+        .summary = "reference sandbox entered and initialized transport loop region",
+    });
 }
 
 void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
@@ -89,6 +118,18 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
         transport.restart();
     }
 
+    const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
+        .frame_index = host.frame_timing().frame_index,
+        .simulation_step = fixed_steps_,
+        .transport_state = transport_snapshot.playback_state,
+        .transport_position_seconds = transport_snapshot.position_seconds,
+        .root_random_seed = host.random_service().root_seed(),
+        .authoritative_state_hash = make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_),
+        .label = "fixed-step",
+        .summary = "sandbox transport/RNG state checkpoint",
+    });
+
     foundation::TelemetrySnapshot snapshot{};
     snapshot.audio_drift_ms = 0.00;
     snapshot.visible_cues = 3;
@@ -102,6 +143,8 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     const foundation::DeterministicRandomService& random_service = host.random_service();
     const foundation::DeterministicRng* transport_rng = random_service.find_stream("reference-sandbox.transport");
     const foundation::DeterministicRng* visual_rng = random_service.find_stream("reference-sandbox.visual");
+    const gameplay::ReplayRecorder& replay_recorder = host.replay();
+    const gameplay::ReplayCheckpoint* last_checkpoint = replay_recorder.last_checkpoint();
 
     host.render_extraction().set_view_camera(
         reaktio::render::RenderView::MainScene,
@@ -142,6 +185,12 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                << (transport_rng != nullptr ? transport_rng->generated_values() : 0) << '/'
                << (visual_rng != nullptr ? visual_rng->generated_values() : 0);
     host.render_extraction().add_debug_text(0, 11, 0x0d, rng_stream.str());
+
+    std::ostringstream replay_stream;
+    replay_stream << "replay inputs=" << replay_recorder.input_frame_count() << " checkpoints="
+                  << replay_recorder.checkpoint_count() << " last="
+                  << (last_checkpoint != nullptr ? last_checkpoint->label : std::string_view("none"));
+    host.render_extraction().add_debug_text(0, 12, 0x0c, replay_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {

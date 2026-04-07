@@ -106,6 +106,12 @@ int SmokeApplication::run() {
         std::string("Running mode: ") + std::string(mode->descriptor().display_name) + " (" +
             std::string(mode->descriptor().id) + ")");
 
+    replay_recorder_.begin_session(gameplay::ReplaySessionMetadata{
+        .mode_id = std::string(mode->descriptor().id),
+        .mode_display_name = std::string(mode->descriptor().display_name),
+        .root_random_seed = random_service_.root_seed(),
+    });
+
     mode->on_enter(*this);
 
     while (!platform_shell.should_quit()) {
@@ -116,12 +122,13 @@ int SmokeApplication::run() {
         const std::size_t telemetry_count_before_frame = telemetry_recorder_.size();
 
         platform_shell.pump_events();
+        replay_recorder_.record_input_frame(platform_shell.frame_timing(), platform_shell.input_snapshot());
 
         double simulation_ms = 0.0;
         while (platform_shell.frame_clock().should_run_fixed_step()) {
             const auto simulation_start = std::chrono::steady_clock::now();
-            mode->on_fixed_step(*this, platform_shell.frame_timing().fixed_step_seconds);
             transport_stub_.advance(platform_shell.frame_timing().fixed_step_seconds);
+            mode->on_fixed_step(*this, platform_shell.frame_timing().fixed_step_seconds);
             const auto simulation_end = std::chrono::steady_clock::now();
             simulation_ms += milliseconds_between(simulation_start, simulation_end);
             platform_shell.frame_clock().consume_fixed_step();
@@ -165,6 +172,16 @@ int SmokeApplication::run() {
     mode->on_exit(*this);
     active_shell_ = nullptr;
 
+    {
+        std::ostringstream replay_stream;
+        replay_stream << "Replay capture: inputs=" << replay_recorder_.input_frame_count() << " checkpoints="
+                      << replay_recorder_.checkpoint_count();
+        if (const gameplay::ReplayCheckpoint* checkpoint = replay_recorder_.last_checkpoint()) {
+            replay_stream << " last=" << checkpoint->label;
+        }
+        crash_safe_log_.write(foundation::LogLevel::Info, replay_stream.str());
+    }
+
     if (const foundation::TelemetrySnapshot* snapshot = telemetry_recorder_.last()) {
         crash_safe_log_.write(
             foundation::LogLevel::Info,
@@ -203,6 +220,10 @@ const platform::WindowState& SmokeApplication::window_state() const noexcept {
 
 foundation::DeterministicRandomService& SmokeApplication::random_service() noexcept {
     return random_service_;
+}
+
+gameplay::ReplayRecorder& SmokeApplication::replay() noexcept {
+    return replay_recorder_;
 }
 
 gameplay::ITransportControl& SmokeApplication::transport() noexcept {
