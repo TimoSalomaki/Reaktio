@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <type_traits>
+#include <tuple>
 #include <utility>
 
 namespace reaktio::gameplay {
@@ -113,6 +113,7 @@ class WorldModel {
     }
 
     entt::registry registry_;
+    std::size_t live_entity_count_{};
 };
 
 } // namespace reaktio::gameplay
