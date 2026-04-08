@@ -4,6 +4,7 @@
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
+#include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
 #include "reaktio/gameplay/Transport.hpp"
@@ -54,7 +55,11 @@ std::uint64_t make_state_hash(
     std::uint64_t fixed_steps,
     const gameplay::TransportSnapshot& transport_snapshot,
     std::uint32_t transport_roll,
-    std::uint32_t visual_roll) noexcept {
+    std::uint32_t visual_roll,
+    float average_phase,
+    float cue_world_x,
+    gameplay::Vector3 tip_world,
+    std::uint64_t collision_signature) noexcept {
     std::uint64_t hash = 14695981039346656037ull;
     hash ^= fixed_steps;
     hash *= 1099511628211ull;
@@ -65,12 +70,51 @@ std::uint64_t make_state_hash(
     hash ^= transport_roll;
     hash *= 1099511628211ull;
     hash ^= visual_roll;
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(average_phase * 1000000.0f)));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(cue_world_x * 1000.0f)));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(tip_world.x * 1000.0f)));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(tip_world.y * 1000.0f)));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(tip_world.z * 1000.0f)));
+    hash *= 1099511628211ull;
+    hash ^= collision_signature;
     return hash;
 }
 
-struct SandboxMotionCue2D {
-    float velocity_x{};
-};
+std::uint64_t hash_collision_report(const gameplay::CollisionDetectionReport& collision_report) noexcept {
+    const auto hash_float = [](std::uint64_t& hash, float value, float scale) noexcept {
+        hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(value * scale)));
+        hash *= 1099511628211ull;
+    };
+
+    std::uint64_t hash = 14695981039346656037ull;
+    hash ^= collision_report.circle_circle_contacts;
+    hash *= 1099511628211ull;
+    hash ^= collision_report.box_box_contacts;
+    hash *= 1099511628211ull;
+    hash ^= collision_report.circle_box_contacts;
+    hash *= 1099511628211ull;
+    hash ^= collision_report.skipped_missing_transforms;
+    hash *= 1099511628211ull;
+
+    for (const gameplay::CollisionContact2D& contact : collision_report.contacts) {
+        hash ^= contact.first.value();
+        hash *= 1099511628211ull;
+        hash ^= contact.second.value();
+        hash *= 1099511628211ull;
+        hash ^= static_cast<std::uint32_t>(contact.shape_pair);
+        hash *= 1099511628211ull;
+        hash_float(hash, contact.normal.x, 1000000.0f);
+        hash_float(hash, contact.normal.y, 1000000.0f);
+        hash_float(hash, contact.penetration, 1000.0f);
+    }
+
+    return hash;
+}
 
 struct SandboxPulseCue {
     float phase{};
@@ -79,11 +123,6 @@ struct SandboxPulseCue {
 
 struct SandboxLaneCue {
     std::uint32_t lane_index{};
-};
-
-struct SandboxRigSpin3D {
-    float yaw_radians{};
-    float yaw_velocity{};
 };
 
 float sample_average_phase(const gameplay::WorldModel& world) {
@@ -151,8 +190,9 @@ void seed_world(gameplay::IModeHost& host) {
     gameplay::WorldModel& world = host.world_model();
 
     constexpr std::array<float, 3> k_spawn_x{-240.0f, 0.0f, 240.0f};
-    constexpr std::array<float, 3> k_velocity_x{12.0f, -6.0f, 9.0f};
+    constexpr std::array<float, 3> k_velocity_x{72.0f, -48.0f, 60.0f};
     constexpr std::array<float, 3> k_phase_velocity{0.07f, 0.11f, 0.05f};
+    constexpr std::array<float, 3> k_angular_velocity{0.35f, -0.28f, 0.22f};
 
     for (std::size_t index = 0; index < k_spawn_x.size(); ++index) {
         const gameplay::WorldEntity lane_root = world.create_entity("reference.sandbox.lane-root");
@@ -165,10 +205,35 @@ void seed_world(gameplay::IModeHost& host) {
                 },
             });
 
+        const gameplay::WorldEntity hit_window = world.create_entity("reference.sandbox.hit-window");
+        world.emplace<gameplay::TransformParent>(hit_window, gameplay::TransformParent{.parent = lane_root});
+        world.emplace<gameplay::LocalTransform2D>(
+            hit_window,
+            gameplay::LocalTransform2D{
+                .translation = {.x = 0.0f, .y = 0.0f},
+            });
+        world.emplace<gameplay::AxisAlignedBoxCollider2D>(
+            hit_window,
+            gameplay::AxisAlignedBoxCollider2D{
+                .half_extents = {.x = 32.0f, .y = 24.0f},
+            });
+        world.emplace<gameplay::CollisionFilter2D>(
+            hit_window,
+            gameplay::CollisionFilter2D{.layer_bits = 0x2u, .collides_with_bits = 0x1u});
+
         const gameplay::WorldEntity cue = world.create_entity("reference.sandbox.cue");
         world.emplace<gameplay::TransformParent>(cue, gameplay::TransformParent{.parent = lane_root});
         world.emplace<gameplay::LocalTransform2D>(cue, gameplay::LocalTransform2D{});
-        world.emplace<SandboxMotionCue2D>(cue, SandboxMotionCue2D{.velocity_x = k_velocity_x[index]});
+        world.emplace<gameplay::LinearVelocity2D>(
+            cue,
+            gameplay::LinearVelocity2D{.units_per_second = {.x = k_velocity_x[index], .y = 0.0f}});
+        world.emplace<gameplay::AngularVelocity2D>(
+            cue,
+            gameplay::AngularVelocity2D{.radians_per_second = k_angular_velocity[index]});
+        world.emplace<gameplay::CircleCollider2D>(cue, gameplay::CircleCollider2D{.radius = 18.0f});
+        world.emplace<gameplay::CollisionFilter2D>(
+            cue,
+            gameplay::CollisionFilter2D{.layer_bits = 0x1u, .collides_with_bits = 0x2u});
         world.emplace<SandboxPulseCue>(
             cue,
             SandboxPulseCue{
@@ -185,7 +250,9 @@ void seed_world(gameplay::IModeHost& host) {
             .translation = {.x = 0.0f, .y = 0.25f, .z = 6.0f},
             .rotation = gameplay::make_axis_angle_rotation({.x = 0.0f, .y = 1.0f, .z = 0.0f}, 0.2f),
         });
-    world.emplace<SandboxRigSpin3D>(rig_root, SandboxRigSpin3D{.yaw_radians = 0.2f, .yaw_velocity = 0.09f});
+    world.emplace<gameplay::AngularVelocity3D>(
+        rig_root,
+        gameplay::AngularVelocity3D{.axis = {.x = 0.0f, .y = 1.0f, .z = 0.0f}, .radians_per_second = 0.09f});
 
     const gameplay::WorldEntity rig_arm = world.create_entity("reference.sandbox.rig-arm");
     world.emplace<gameplay::TransformParent>(rig_arm, gameplay::TransformParent{.parent = rig_root});
@@ -195,7 +262,9 @@ void seed_world(gameplay::IModeHost& host) {
             .translation = {.x = 0.75f, .y = 0.0f, .z = 0.9f},
             .rotation = gameplay::make_axis_angle_rotation({.x = 0.0f, .y = 1.0f, .z = 0.0f}, -0.1f),
         });
-    world.emplace<SandboxRigSpin3D>(rig_arm, SandboxRigSpin3D{.yaw_radians = -0.1f, .yaw_velocity = -0.05f});
+    world.emplace<gameplay::AngularVelocity3D>(
+        rig_arm,
+        gameplay::AngularVelocity3D{.axis = {.x = 0.0f, .y = 1.0f, .z = 0.0f}, .radians_per_second = -0.05f});
 
     const gameplay::WorldEntity rig_tip = world.create_entity("reference.sandbox.rig-tip");
     world.emplace<gameplay::TransformParent>(rig_tip, gameplay::TransformParent{.parent = rig_arm});
@@ -207,35 +276,14 @@ void seed_world(gameplay::IModeHost& host) {
 }
 
 void update_world(gameplay::WorldModel& world) {
-    world.for_each<gameplay::LocalTransform2D, SandboxMotionCue2D, SandboxPulseCue>(
-        [](gameplay::WorldEntity, gameplay::LocalTransform2D& transform, SandboxMotionCue2D& motion, SandboxPulseCue& pulse) {
-            transform.translation.x += motion.velocity_x;
-            if (transform.translation.x > 120.0f) {
-                transform.translation.x = -120.0f;
-            } else if (transform.translation.x < -120.0f) {
-                transform.translation.x = 120.0f;
-            }
-
+    world.for_each<gameplay::LocalTransform2D, SandboxPulseCue>(
+        [](gameplay::WorldEntity, gameplay::LocalTransform2D& transform, SandboxPulseCue& pulse) {
             pulse.phase += pulse.phase_velocity;
             if (pulse.phase >= 1.0f) {
                 pulse.phase -= 1.0f;
             }
 
             transform.translation.y = std::sin(pulse.phase * 6.28318531f) * 18.0f;
-            transform.rotation_radians = pulse.phase * 0.35f;
-        });
-
-    world.for_each<gameplay::LocalTransform3D, SandboxRigSpin3D>(
-        [](gameplay::WorldEntity, gameplay::LocalTransform3D& transform, SandboxRigSpin3D& spin) {
-            spin.yaw_radians += spin.yaw_velocity;
-            if (spin.yaw_radians > 3.14159265f) {
-                spin.yaw_radians -= 6.28318531f;
-            } else if (spin.yaw_radians < -3.14159265f) {
-                spin.yaw_radians += 6.28318531f;
-            }
-
-            transform.rotation = gameplay::make_axis_angle_rotation({.x = 0.0f, .y = 1.0f, .z = 0.0f}, spin.yaw_radians);
-            transform.translation.y = std::sin(spin.yaw_radians) * 0.2f;
         });
 }
 
@@ -273,6 +321,11 @@ void publish_transform_diagnostic(
     gameplay::IModeHost& host,
     std::uint64_t fixed_steps,
     const gameplay::TransformPropagationReport& report) {
+    if ((report.detached_2d + report.detached_3d + report.stale_world_transforms_2d +
+         report.stale_world_transforms_3d + report.cycle_breaks_2d + report.cycle_breaks_3d) == 0u) {
+        return;
+    }
+
     std::ostringstream stream;
     stream << "transforms 2d=" << report.propagated_2d << " 3d=" << report.propagated_3d
            << " detached=" << (report.detached_2d + report.detached_3d)
@@ -284,6 +337,39 @@ void publish_transform_diagnostic(
         gameplay::DiagnosticEvent{
             .message = stream.str(),
         });
+}
+
+void publish_motion_collision_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    std::uint64_t collision_signature,
+    std::uint64_t& last_published_collision_signature,
+    const gameplay::MotionIntegrationReport& motion_report,
+    const gameplay::CollisionDetectionReport& collision_report) {
+    if (collision_report.skipped_missing_transforms == 0u &&
+        collision_signature == last_published_collision_signature) {
+        return;
+    }
+
+    std::ostringstream stream;
+    stream << "motion l2=" << motion_report.linear_2d << " a2=" << motion_report.angular_2d
+           << " l3=" << motion_report.linear_3d << " a3=" << motion_report.angular_3d
+            << " contacts=" << collision_report.contacts.size() << " skipped="
+           << collision_report.skipped_missing_transforms;
+    if (!collision_report.contacts.empty()) {
+        stream << " first=" << gameplay::to_string(collision_report.contacts.front().shape_pair)
+               << " pen=" << collision_report.contacts.front().penetration;
+    }
+
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = stream.str(),
+        });
+
+    last_published_collision_signature = collision_signature;
 }
 
 void refresh_transform_summary(
@@ -300,15 +386,28 @@ void refresh_transform_summary(
 
 void propagate_and_refresh(
     gameplay::TransformPropagationReport& propagation_report,
+    gameplay::CollisionDetectionReport& collision_report,
+    std::uint64_t& collision_signature,
     std::size_t& world_entity_count,
     float& average_phase,
     float& sample_cue_world_x,
     gameplay::Vector3& sample_tip_world,
+    std::uint64_t& last_published_collision_signature,
+    const gameplay::MotionIntegrationReport& motion_report,
     std::uint64_t fixed_steps,
     gameplay::IModeHost& host) {
     propagation_report = gameplay::propagate_transforms(host.world_model());
     refresh_transform_summary(world_entity_count, average_phase, sample_cue_world_x, sample_tip_world, host.world_model());
+    collision_report = gameplay::detect_collisions_2d(host.world_model());
+    collision_signature = hash_collision_report(collision_report);
     publish_transform_diagnostic(host, fixed_steps, propagation_report);
+    publish_motion_collision_diagnostic(
+        host,
+        fixed_steps,
+        collision_signature,
+        last_published_collision_signature,
+        motion_report,
+        collision_report);
 }
 
 } // namespace
@@ -325,19 +424,27 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     fixed_steps_ = 0;
     transport_roll_ = 0;
     visual_roll_ = 0;
-    average_phase_ = 0.0f;
     world_entity_count_ = 0;
+    average_phase_ = 0.0f;
     sample_cue_world_x_ = 0.0f;
     sample_tip_world_ = {};
+    collision_signature_ = 0;
+    last_published_collision_signature_ = static_cast<std::uint64_t>(-1);
+    motion_report_ = {};
+    collision_report_ = {};
     propagation_report_ = {};
 
     seed_world(host);
     propagate_and_refresh(
         propagation_report_,
+        collision_report_,
+        collision_signature_,
         world_entity_count_,
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
+        last_published_collision_signature_,
+        motion_report_,
         fixed_steps_,
         host);
 
@@ -348,22 +455,27 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
 
     host.random_service().reset_streams();
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    const std::uint64_t checkpoint_hash = make_state_hash(
+        fixed_steps_,
+        transport_snapshot,
+        transport_roll_,
+        visual_roll_,
+        average_phase_,
+        sample_cue_world_x_,
+        sample_tip_world_,
+        collision_signature_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
         .transport_state = transport_snapshot.playback_state,
         .transport_position_seconds = transport_snapshot.position_seconds,
         .root_random_seed = host.random_service().root_seed(),
-        .authoritative_state_hash = make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_),
+        .authoritative_state_hash = checkpoint_hash,
         .label = "enter",
         .summary = "reference sandbox entered and initialized transport loop region",
     });
     publish_transport_event(host, "enter-play", fixed_steps_, transport_snapshot);
-    publish_replay_checkpoint_event(
-        host,
-        "enter",
-        fixed_steps_,
-        make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_));
+    publish_replay_checkpoint_event(host, "enter", fixed_steps_, checkpoint_hash);
     host.event_bus().publish(
         "mode.reference.sandbox",
         host.frame_timing().frame_index,
@@ -373,7 +485,7 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         });
 }
 
-void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
+void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed_delta_seconds) {
     ++fixed_steps_;
 
     foundation::DeterministicRng& transport_rng =
@@ -405,18 +517,32 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
         action = "restart";
     }
 
-    const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
-    const std::uint64_t checkpoint_hash =
-        make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_);
     update_world(host.world_model());
+    motion_report_ = gameplay::integrate_motion(host.world_model(), fixed_delta_seconds);
+
+    const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
     propagate_and_refresh(
         propagation_report_,
+        collision_report_,
+        collision_signature_,
         world_entity_count_,
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
+        last_published_collision_signature_,
+        motion_report_,
         fixed_steps_,
         host);
+
+    const std::uint64_t checkpoint_hash = make_state_hash(
+        fixed_steps_,
+        transport_snapshot,
+        transport_roll_,
+        visual_roll_,
+        average_phase_,
+        sample_cue_world_x_,
+        sample_tip_world_,
+        collision_signature_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
@@ -425,7 +551,7 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
         .root_random_seed = host.random_service().root_seed(),
         .authoritative_state_hash = checkpoint_hash,
         .label = "fixed-step",
-        .summary = "sandbox transport/RNG state checkpoint",
+        .summary = "sandbox transport/RNG/world state checkpoint",
     });
     publish_transport_event(host, action, fixed_steps_, transport_snapshot);
     publish_replay_checkpoint_event(host, "fixed-step", fixed_steps_, checkpoint_hash);
@@ -512,13 +638,30 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                      << (propagation_report_.stale_world_transforms_2d + propagation_report_.stale_world_transforms_3d)
                      << " cycles=" << (propagation_report_.cycle_breaks_2d + propagation_report_.cycle_breaks_3d);
     host.render_extraction().add_debug_text(0, 15, 0x0e, transform_stream.str());
+
+    std::ostringstream motion_stream;
+    motion_stream << "motion l2=" << motion_report_.linear_2d << " a2=" << motion_report_.angular_2d
+                  << " l3=" << motion_report_.linear_3d << " a3=" << motion_report_.angular_3d
+                  << " contacts=" << collision_report_.contacts.size();
+    if (!collision_report_.contacts.empty()) {
+        motion_stream << " first=" << gameplay::to_string(collision_report_.contacts.front().shape_pair)
+                      << " pen=" << collision_report_.contacts.front().penetration;
+    }
+    host.render_extraction().add_debug_text(0, 16, 0x0d, motion_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
     host.transport().stop();
     const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
-    const std::uint64_t checkpoint_hash =
-        make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_);
+    const std::uint64_t checkpoint_hash = make_state_hash(
+        fixed_steps_,
+        transport_snapshot,
+        transport_roll_,
+        visual_roll_,
+        average_phase_,
+        sample_cue_world_x_,
+        sample_tip_world_,
+        collision_signature_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "reaktio/gameplay/IGameMode.hpp"
+#include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
 
 #include <cstddef>
@@ -26,6 +27,10 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     float average_phase_{};
     float sample_cue_world_x_{};
     gameplay::Vector3 sample_tip_world_{};
+    std::uint64_t collision_signature_{};
+    std::uint64_t last_published_collision_signature_{static_cast<std::uint64_t>(-1)};
+    gameplay::MotionIntegrationReport motion_report_{};
+    gameplay::CollisionDetectionReport collision_report_{};
     gameplay::TransformPropagationReport propagation_report_{};
 };
 
