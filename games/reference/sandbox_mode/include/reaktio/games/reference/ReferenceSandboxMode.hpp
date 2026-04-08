@@ -1,6 +1,7 @@
 #pragma once
 
 #include "reaktio/gameplay/IGameMode.hpp"
+#include "reaktio/gameplay/Transforms.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +24,9 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::uint32_t visual_roll_{};
     std::size_t world_entity_count_{};
     float average_phase_{};
+    float sample_cue_world_x_{};
+    gameplay::Vector3 sample_tip_world_{};
+    gameplay::TransformPropagationReport propagation_report_{};
 };
 
 } // namespace reaktio::games::reference

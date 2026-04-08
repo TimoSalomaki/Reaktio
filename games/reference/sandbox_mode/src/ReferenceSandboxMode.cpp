@@ -5,6 +5,7 @@
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
+#include "reaktio/gameplay/Transforms.hpp"
 #include "reaktio/gameplay/Transport.hpp"
 #include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/FrameClock.hpp"
@@ -12,9 +13,11 @@
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 
-#include <algorithm>
 #include <array>
+#include <cmath>
 #include <sstream>
+#include <string>
+#include <string_view>
 
 namespace reaktio::games::reference {
 
@@ -65,9 +68,7 @@ std::uint64_t make_state_hash(
     return hash;
 }
 
-struct SandboxSpatialCue {
-    float x{};
-    float y{};
+struct SandboxMotionCue2D {
     float velocity_x{};
 };
 
@@ -80,47 +81,10 @@ struct SandboxLaneCue {
     std::uint32_t lane_index{};
 };
 
-void seed_world(gameplay::IModeHost& host) {
-    gameplay::WorldModel& world = host.world_model();
-
-    constexpr std::array<float, 3> k_spawn_x{-240.0f, 0.0f, 240.0f};
-    constexpr std::array<float, 3> k_velocity_x{12.0f, -6.0f, 9.0f};
-    constexpr std::array<float, 3> k_phase_velocity{0.07f, 0.11f, 0.05f};
-
-    for (std::size_t index = 0; index < k_spawn_x.size(); ++index) {
-        const gameplay::WorldEntity entity = world.create_entity("reference.sandbox.cue");
-        world.emplace<SandboxSpatialCue>(
-            entity,
-            SandboxSpatialCue{
-                .x = k_spawn_x[index],
-                .y = -120.0f + static_cast<float>(index) * 120.0f,
-                .velocity_x = k_velocity_x[index],
-            });
-        world.emplace<SandboxPulseCue>(
-            entity,
-            SandboxPulseCue{
-                .phase = static_cast<float>(index) * 0.25f,
-                .phase_velocity = k_phase_velocity[index],
-            });
-        world.emplace<SandboxLaneCue>(entity, SandboxLaneCue{.lane_index = static_cast<std::uint32_t>(index)});
-    }
-}
-
-void update_world(gameplay::WorldModel& world) {
-    world.for_each<SandboxSpatialCue, SandboxPulseCue>([](gameplay::WorldEntity, SandboxSpatialCue& spatial, SandboxPulseCue& pulse) {
-        spatial.x += spatial.velocity_x;
-        if (spatial.x > 320.0f) {
-            spatial.x = -320.0f;
-        } else if (spatial.x < -320.0f) {
-            spatial.x = 320.0f;
-        }
-
-        pulse.phase += pulse.phase_velocity;
-        if (pulse.phase >= 1.0f) {
-            pulse.phase -= 1.0f;
-        }
-    });
-}
+struct SandboxRigSpin3D {
+    float yaw_radians{};
+    float yaw_velocity{};
+};
 
 float sample_average_phase(const gameplay::WorldModel& world) {
     float total_phase = 0.0f;
@@ -183,6 +147,170 @@ void publish_replay_checkpoint_event(
         });
 }
 
+void seed_world(gameplay::IModeHost& host) {
+    gameplay::WorldModel& world = host.world_model();
+
+    constexpr std::array<float, 3> k_spawn_x{-240.0f, 0.0f, 240.0f};
+    constexpr std::array<float, 3> k_velocity_x{12.0f, -6.0f, 9.0f};
+    constexpr std::array<float, 3> k_phase_velocity{0.07f, 0.11f, 0.05f};
+
+    for (std::size_t index = 0; index < k_spawn_x.size(); ++index) {
+        const gameplay::WorldEntity lane_root = world.create_entity("reference.sandbox.lane-root");
+        world.emplace<gameplay::LocalTransform2D>(
+            lane_root,
+            gameplay::LocalTransform2D{
+                .translation = {
+                    .x = k_spawn_x[index],
+                    .y = -120.0f + static_cast<float>(index) * 120.0f,
+                },
+            });
+
+        const gameplay::WorldEntity cue = world.create_entity("reference.sandbox.cue");
+        world.emplace<gameplay::TransformParent>(cue, gameplay::TransformParent{.parent = lane_root});
+        world.emplace<gameplay::LocalTransform2D>(cue, gameplay::LocalTransform2D{});
+        world.emplace<SandboxMotionCue2D>(cue, SandboxMotionCue2D{.velocity_x = k_velocity_x[index]});
+        world.emplace<SandboxPulseCue>(
+            cue,
+            SandboxPulseCue{
+                .phase = static_cast<float>(index) * 0.25f,
+                .phase_velocity = k_phase_velocity[index],
+            });
+        world.emplace<SandboxLaneCue>(cue, SandboxLaneCue{.lane_index = static_cast<std::uint32_t>(index)});
+    }
+
+    const gameplay::WorldEntity rig_root = world.create_entity("reference.sandbox.rig-root");
+    world.emplace<gameplay::LocalTransform3D>(
+        rig_root,
+        gameplay::LocalTransform3D{
+            .translation = {.x = 0.0f, .y = 0.25f, .z = 6.0f},
+            .rotation = gameplay::make_axis_angle_rotation({.x = 0.0f, .y = 1.0f, .z = 0.0f}, 0.2f),
+        });
+    world.emplace<SandboxRigSpin3D>(rig_root, SandboxRigSpin3D{.yaw_radians = 0.2f, .yaw_velocity = 0.09f});
+
+    const gameplay::WorldEntity rig_arm = world.create_entity("reference.sandbox.rig-arm");
+    world.emplace<gameplay::TransformParent>(rig_arm, gameplay::TransformParent{.parent = rig_root});
+    world.emplace<gameplay::LocalTransform3D>(
+        rig_arm,
+        gameplay::LocalTransform3D{
+            .translation = {.x = 0.75f, .y = 0.0f, .z = 0.9f},
+            .rotation = gameplay::make_axis_angle_rotation({.x = 0.0f, .y = 1.0f, .z = 0.0f}, -0.1f),
+        });
+    world.emplace<SandboxRigSpin3D>(rig_arm, SandboxRigSpin3D{.yaw_radians = -0.1f, .yaw_velocity = -0.05f});
+
+    const gameplay::WorldEntity rig_tip = world.create_entity("reference.sandbox.rig-tip");
+    world.emplace<gameplay::TransformParent>(rig_tip, gameplay::TransformParent{.parent = rig_arm});
+    world.emplace<gameplay::LocalTransform3D>(
+        rig_tip,
+        gameplay::LocalTransform3D{
+            .translation = {.x = 0.5f, .y = 0.0f, .z = 1.25f},
+        });
+}
+
+void update_world(gameplay::WorldModel& world) {
+    world.for_each<gameplay::LocalTransform2D, SandboxMotionCue2D, SandboxPulseCue>(
+        [](gameplay::WorldEntity, gameplay::LocalTransform2D& transform, SandboxMotionCue2D& motion, SandboxPulseCue& pulse) {
+            transform.translation.x += motion.velocity_x;
+            if (transform.translation.x > 120.0f) {
+                transform.translation.x = -120.0f;
+            } else if (transform.translation.x < -120.0f) {
+                transform.translation.x = 120.0f;
+            }
+
+            pulse.phase += pulse.phase_velocity;
+            if (pulse.phase >= 1.0f) {
+                pulse.phase -= 1.0f;
+            }
+
+            transform.translation.y = std::sin(pulse.phase * 6.28318531f) * 18.0f;
+            transform.rotation_radians = pulse.phase * 0.35f;
+        });
+
+    world.for_each<gameplay::LocalTransform3D, SandboxRigSpin3D>(
+        [](gameplay::WorldEntity, gameplay::LocalTransform3D& transform, SandboxRigSpin3D& spin) {
+            spin.yaw_radians += spin.yaw_velocity;
+            if (spin.yaw_radians > 3.14159265f) {
+                spin.yaw_radians -= 6.28318531f;
+            } else if (spin.yaw_radians < -3.14159265f) {
+                spin.yaw_radians += 6.28318531f;
+            }
+
+            transform.rotation = gameplay::make_axis_angle_rotation({.x = 0.0f, .y = 1.0f, .z = 0.0f}, spin.yaw_radians);
+            transform.translation.y = std::sin(spin.yaw_radians) * 0.2f;
+        });
+}
+
+float sample_first_world_x(const gameplay::WorldModel& world) {
+    float world_x = 0.0f;
+    bool assigned = false;
+    world.for_each<gameplay::WorldTransform2D, SandboxLaneCue>(
+        [&](gameplay::WorldEntity, const gameplay::WorldTransform2D& transform, const SandboxLaneCue&) {
+            if (assigned) {
+                return;
+            }
+
+            world_x = transform.translation.x;
+            assigned = true;
+        });
+    return world_x;
+}
+
+gameplay::Vector3 sample_tip_world_position(const gameplay::WorldModel& world) {
+    gameplay::Vector3 tip_position{};
+    bool assigned = false;
+    world.for_each<gameplay::EntityName, gameplay::WorldTransform3D>(
+        [&](gameplay::WorldEntity, const gameplay::EntityName& name, const gameplay::WorldTransform3D& transform) {
+            if (assigned || name.value != "reference.sandbox.rig-tip") {
+                return;
+            }
+
+            tip_position = transform.translation;
+            assigned = true;
+        });
+    return tip_position;
+}
+
+void publish_transform_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    const gameplay::TransformPropagationReport& report) {
+    std::ostringstream stream;
+    stream << "transforms 2d=" << report.propagated_2d << " 3d=" << report.propagated_3d
+           << " detached=" << (report.detached_2d + report.detached_3d)
+           << " cycles=" << (report.cycle_breaks_2d + report.cycle_breaks_3d);
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = stream.str(),
+        });
+}
+
+void refresh_transform_summary(
+    std::size_t& world_entity_count,
+    float& average_phase,
+    float& sample_cue_world_x,
+    gameplay::Vector3& sample_tip_world,
+    const gameplay::WorldModel& world) {
+    world_entity_count = world.entity_count();
+    average_phase = sample_average_phase(world);
+    sample_cue_world_x = sample_first_world_x(world);
+    sample_tip_world = sample_tip_world_position(world);
+}
+
+void propagate_and_refresh(
+    gameplay::TransformPropagationReport& propagation_report,
+    std::size_t& world_entity_count,
+    float& average_phase,
+    float& sample_cue_world_x,
+    gameplay::Vector3& sample_tip_world,
+    std::uint64_t fixed_steps,
+    gameplay::IModeHost& host) {
+    propagation_report = gameplay::propagate_transforms(host.world_model());
+    refresh_transform_summary(world_entity_count, average_phase, sample_cue_world_x, sample_tip_world, host.world_model());
+    publish_transform_diagnostic(host, fixed_steps, propagation_report);
+}
+
 } // namespace
 
 const gameplay::ModeDescriptor& ReferenceSandboxMode::mode_descriptor() noexcept {
@@ -199,10 +327,19 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     visual_roll_ = 0;
     average_phase_ = 0.0f;
     world_entity_count_ = 0;
+    sample_cue_world_x_ = 0.0f;
+    sample_tip_world_ = {};
+    propagation_report_ = {};
 
     seed_world(host);
-    world_entity_count_ = host.world_model().entity_count();
-    average_phase_ = sample_average_phase(host.world_model());
+    propagate_and_refresh(
+        propagation_report_,
+        world_entity_count_,
+        average_phase_,
+        sample_cue_world_x_,
+        sample_tip_world_,
+        fixed_steps_,
+        host);
 
     gameplay::ITransportControl& transport = host.transport();
     transport.stop();
@@ -272,8 +409,14 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double) {
     const std::uint64_t checkpoint_hash =
         make_state_hash(fixed_steps_, transport_snapshot, transport_roll_, visual_roll_);
     update_world(host.world_model());
-    world_entity_count_ = host.world_model().entity_count();
-    average_phase_ = sample_average_phase(host.world_model());
+    propagate_and_refresh(
+        propagation_report_,
+        world_entity_count_,
+        average_phase_,
+        sample_cue_world_x_,
+        sample_tip_world_,
+        fixed_steps_,
+        host);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
@@ -358,8 +501,17 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
 
     std::ostringstream world_stream;
     world_stream << "world entities=" << world_entity_count_ << " phase=" << average_phase_
-                 << " sample=" << sample_first_label(host.world_model());
+                 << " sample=" << sample_first_label(host.world_model()) << " x=" << sample_cue_world_x_
+                 << " tip-z=" << sample_tip_world_.z;
     host.render_extraction().add_debug_text(0, 14, 0x0f, world_stream.str());
+
+    std::ostringstream transform_stream;
+    transform_stream << "propagate 2d=" << propagation_report_.propagated_2d << " 3d="
+                     << propagation_report_.propagated_3d << " detached="
+                     << (propagation_report_.detached_2d + propagation_report_.detached_3d) << " stale="
+                     << (propagation_report_.stale_world_transforms_2d + propagation_report_.stale_world_transforms_3d)
+                     << " cycles=" << (propagation_report_.cycle_breaks_2d + propagation_report_.cycle_breaks_3d);
+    host.render_extraction().add_debug_text(0, 15, 0x0e, transform_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {

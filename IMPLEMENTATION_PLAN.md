@@ -184,7 +184,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [x] Register modes through compile-time descriptors or factories rather than runtime plugin loading in version 1.
 - [x] Add the world model using EnTT or an equivalent registry-backed approach.
 - [x] Keep the shared world model intentionally small and push mode-specific spatial policy out of core runtime.
-- [ ] Create transform components and a transform propagation strategy that works for both 2D and 3D hierarchies.
+- [x] Create transform components and a transform propagation strategy that works for both 2D and 3D hierarchies.
 - [ ] Add lightweight movement and collision primitives suitable for deterministic rhythm gameplay.
 - [ ] Create a resource registry that separates authoring identifiers from runtime handles.
 - [ ] Add configuration loading for engine settings, input bindings, and mode configuration.
