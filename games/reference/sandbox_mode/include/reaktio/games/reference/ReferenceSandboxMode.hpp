@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace reaktio::games::reference {
 
@@ -24,6 +25,13 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::uint64_t fixed_steps_{};
     std::uint32_t transport_roll_{};
     std::uint32_t visual_roll_{};
+    std::string configured_transport_pause_binding_{"keyboard:Space"};
+    std::string configured_transport_restart_binding_{"keyboard:R"};
+    float configured_velocity_scale_{1.0f};
+    float configured_hit_window_half_width_{32.0f};
+    float configured_hit_window_half_height_{24.0f};
+    std::string configured_cue_material_authoring_id_{"reference.sandbox.material.cue"};
+    std::string configured_debug_font_authoring_id_{"reference.sandbox.font.debug"};
     foundation::ResourceRegistrySummary resource_summary_{};
     foundation::ResourceHandle cue_material_handle_{};
     foundation::ResourceHandle debug_font_handle_{};

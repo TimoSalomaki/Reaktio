@@ -4,12 +4,14 @@
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
+#include "reaktio/gameplay/ModeConfiguration.hpp"
 #include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
 #include "reaktio/gameplay/Transport.hpp"
 #include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/FrameClock.hpp"
+#include "reaktio/platform/InputBindings.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
@@ -148,6 +150,46 @@ struct SandboxLaneCue {
     std::uint32_t lane_index{};
 };
 
+struct SandboxModeConfig {
+    float velocity_scale{1.0f};
+    float hit_window_half_width{32.0f};
+    float hit_window_half_height{24.0f};
+    std::string cue_material_authoring_id{"reference.sandbox.material.cue"};
+    std::string debug_font_authoring_id{"reference.sandbox.font.debug"};
+};
+
+SandboxModeConfig load_sandbox_mode_config(const gameplay::ModeConfigurationStore& store) {
+    const gameplay::ModeConfigurationView view = store.view(k_descriptor.id);
+    SandboxModeConfig config{};
+    config.velocity_scale = static_cast<float>(view.get_double("velocity_scale", config.velocity_scale));
+    config.hit_window_half_width = static_cast<float>(view.get_double("hit_window_half_width", config.hit_window_half_width));
+    config.hit_window_half_height = static_cast<float>(view.get_double("hit_window_half_height", config.hit_window_half_height));
+    config.cue_material_authoring_id = std::string(
+        view.get_string("cue_material_authoring_id", config.cue_material_authoring_id));
+    config.debug_font_authoring_id = std::string(
+        view.get_string("debug_font_authoring_id", config.debug_font_authoring_id));
+    return config;
+}
+
+std::string describe_binding(
+    const platform::InputBindingsConfig& input_bindings,
+    std::string_view action_id,
+    std::string_view fallback) {
+    if (const platform::InputActionBinding* binding = input_bindings.find_action(action_id)) {
+        if (!binding->primary.empty() && !binding->secondary.empty()) {
+            return binding->primary + "/" + binding->secondary;
+        }
+        if (!binding->primary.empty()) {
+            return binding->primary;
+        }
+        if (!binding->secondary.empty()) {
+            return binding->secondary;
+        }
+    }
+
+    return std::string(fallback);
+}
+
 float sample_average_phase(const gameplay::WorldModel& world) {
     float total_phase = 0.0f;
     std::size_t count = 0;
@@ -214,7 +256,9 @@ void seed_resources(
     foundation::ResourceRegistrySummary& resource_summary,
     foundation::ResourceHandle& cue_material_handle,
     foundation::ResourceHandle& debug_font_handle,
-    bool& stale_debug_font_handle_valid) {
+    bool& stale_debug_font_handle_valid,
+    std::string_view cue_material_authoring_id,
+    std::string_view debug_font_authoring_id) {
     (void)resource_registry.register_resource(
         foundation::ResourceKind::Texture,
         "reference.sandbox.texture.cue",
@@ -248,16 +292,49 @@ void seed_resources(
     cue_material_handle = {};
     if (const foundation::ResourceRecord* resource = resource_registry.find(
             foundation::ResourceKind::Material,
-            "reference.sandbox.material.cue");
+            cue_material_authoring_id);
         resource != nullptr) {
         cue_material_handle = resource->handle;
     }
 
     debug_font_handle = resource_registry.resolve(
         foundation::ResourceKind::Font,
-        "reference.sandbox.font.debug");
+        debug_font_authoring_id);
     stale_debug_font_handle_valid = resource_registry.contains(stale_font_handle);
     resource_summary = resource_registry.summary();
+}
+
+void publish_mode_config_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    const SandboxModeConfig& config) {
+    std::ostringstream stream;
+    stream << "mode-config speed=" << config.velocity_scale << " hit=" << config.hit_window_half_width << 'x'
+           << config.hit_window_half_height << " cue-id=" << config.cue_material_authoring_id
+           << " font-id=" << config.debug_font_authoring_id;
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = stream.str(),
+        });
+}
+
+void publish_input_binding_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    std::string_view pause_binding,
+    std::string_view restart_binding) {
+    std::ostringstream stream;
+    stream << "input-bindings pause=" << pause_binding << " restart=" << restart_binding;
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = stream.str(),
+        });
 }
 
 void publish_resource_diagnostic(
@@ -287,7 +364,11 @@ void publish_resource_diagnostic(
         });
 }
 
-void seed_world(gameplay::IModeHost& host) {
+void seed_world(
+    gameplay::IModeHost& host,
+    float velocity_scale,
+    float hit_window_half_width,
+    float hit_window_half_height) {
     gameplay::WorldModel& world = host.world_model();
 
     constexpr std::array<float, 3> k_spawn_x{-240.0f, 0.0f, 240.0f};
@@ -316,7 +397,7 @@ void seed_world(gameplay::IModeHost& host) {
         world.emplace<gameplay::AxisAlignedBoxCollider2D>(
             hit_window,
             gameplay::AxisAlignedBoxCollider2D{
-                .half_extents = {.x = 32.0f, .y = 24.0f},
+                .half_extents = {.x = hit_window_half_width, .y = hit_window_half_height},
             });
         world.emplace<gameplay::CollisionFilter2D>(
             hit_window,
@@ -327,7 +408,7 @@ void seed_world(gameplay::IModeHost& host) {
         world.emplace<gameplay::LocalTransform2D>(cue, gameplay::LocalTransform2D{});
         world.emplace<gameplay::LinearVelocity2D>(
             cue,
-            gameplay::LinearVelocity2D{.units_per_second = {.x = k_velocity_x[index], .y = 0.0f}});
+            gameplay::LinearVelocity2D{.units_per_second = {.x = k_velocity_x[index] * velocity_scale, .y = 0.0f}});
         world.emplace<gameplay::AngularVelocity2D>(
             cue,
             gameplay::AngularVelocity2D{.radians_per_second = k_angular_velocity[index]});
@@ -527,6 +608,13 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     fixed_steps_ = 0;
     transport_roll_ = 0;
     visual_roll_ = 0;
+    configured_transport_pause_binding_ = "keyboard:Space";
+    configured_transport_restart_binding_ = "keyboard:R";
+    configured_velocity_scale_ = 1.0f;
+    configured_hit_window_half_width_ = 32.0f;
+    configured_hit_window_half_height_ = 24.0f;
+    configured_cue_material_authoring_id_ = "reference.sandbox.material.cue";
+    configured_debug_font_authoring_id_ = "reference.sandbox.font.debug";
     resource_summary_ = {};
     cue_material_handle_ = {};
     debug_font_handle_ = {};
@@ -542,13 +630,34 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     collision_report_ = {};
     propagation_report_ = {};
 
+    const SandboxModeConfig mode_config = load_sandbox_mode_config(host.mode_configuration());
+    configured_velocity_scale_ = mode_config.velocity_scale;
+    configured_hit_window_half_width_ = mode_config.hit_window_half_width;
+    configured_hit_window_half_height_ = mode_config.hit_window_half_height;
+    configured_cue_material_authoring_id_ = mode_config.cue_material_authoring_id;
+    configured_debug_font_authoring_id_ = mode_config.debug_font_authoring_id;
+    configured_transport_pause_binding_ = describe_binding(
+        host.input_bindings(),
+        "transport_pause",
+        configured_transport_pause_binding_);
+    configured_transport_restart_binding_ = describe_binding(
+        host.input_bindings(),
+        "transport_restart",
+        configured_transport_restart_binding_);
+
     seed_resources(
         host.resource_registry(),
         resource_summary_,
         cue_material_handle_,
         debug_font_handle_,
-        stale_debug_font_handle_valid_);
-    seed_world(host);
+        stale_debug_font_handle_valid_,
+        configured_cue_material_authoring_id_,
+        configured_debug_font_authoring_id_);
+    seed_world(
+        host,
+        configured_velocity_scale_,
+        configured_hit_window_half_width_,
+        configured_hit_window_half_height_);
     propagate_and_refresh(
         propagation_report_,
         collision_report_,
@@ -568,6 +677,12 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         cue_material_handle_,
         debug_font_handle_,
         stale_debug_font_handle_valid_);
+    publish_mode_config_diagnostic(host, fixed_steps_, mode_config);
+    publish_input_binding_diagnostic(
+        host,
+        fixed_steps_,
+        configured_transport_pause_binding_,
+        configured_transport_restart_binding_);
 
     gameplay::ITransportControl& transport = host.transport();
     transport.stop();
@@ -786,6 +901,18 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                     << " cue=" << cue_material_handle_.value() << " debug=" << debug_font_handle_.value()
                     << " stale=" << stale_debug_font_handle_valid_;
     host.render_extraction().add_debug_text(0, 17, 0x0c, resource_stream.str());
+
+    std::ostringstream config_stream;
+    config_stream << "cfg speed=" << configured_velocity_scale_ << " hit=" << configured_hit_window_half_width_
+                  << 'x' << configured_hit_window_half_height_ << " cue-id="
+                  << configured_cue_material_authoring_id_ << " font-id="
+                  << configured_debug_font_authoring_id_;
+    host.render_extraction().add_debug_text(0, 18, 0x0b, config_stream.str());
+
+    std::ostringstream binding_stream;
+    binding_stream << "bindings pause=" << configured_transport_pause_binding_
+                   << " restart=" << configured_transport_restart_binding_;
+    host.render_extraction().add_debug_text(0, 19, 0x0a, binding_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {

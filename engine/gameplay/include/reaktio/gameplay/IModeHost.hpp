@@ -8,6 +8,7 @@ struct RuntimeBudget;
 } // namespace reaktio::foundation
 
 namespace reaktio::platform {
+class InputBindingsConfig;
 class InputSnapshot;
 struct FrameTiming;
 struct StackProbe;
@@ -21,6 +22,7 @@ class RenderExtractionContext;
 namespace reaktio::gameplay {
 class EventBus;
 class ITransportControl;
+class ModeConfigurationStore;
 class ReplayRecorder;
 class WorldModel;
 } // namespace reaktio::gameplay
@@ -34,10 +36,12 @@ class IModeHost {
     [[nodiscard]] virtual const foundation::RuntimeBudget& runtime_budget() const noexcept = 0;
     [[nodiscard]] virtual const platform::StackProbe& stack_probe() const noexcept = 0;
     [[nodiscard]] virtual const platform::InputSnapshot& input_snapshot() const noexcept = 0;
+    [[nodiscard]] virtual const platform::InputBindingsConfig& input_bindings() const noexcept = 0;
     [[nodiscard]] virtual const platform::FrameTiming& frame_timing() const noexcept = 0;
     [[nodiscard]] virtual const platform::WindowState& window_state() const noexcept = 0;
     [[nodiscard]] virtual foundation::DeterministicRandomService& random_service() noexcept = 0;
     [[nodiscard]] virtual foundation::ResourceRegistry& resource_registry() noexcept = 0;
+    [[nodiscard]] virtual const ModeConfigurationStore& mode_configuration() const noexcept = 0;
     [[nodiscard]] virtual EventBus& event_bus() noexcept = 0;
     [[nodiscard]] virtual ReplayRecorder& replay() noexcept = 0;
     [[nodiscard]] virtual WorldModel& world_model() noexcept = 0;

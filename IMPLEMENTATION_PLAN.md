@@ -187,7 +187,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [x] Create transform components and a transform propagation strategy that works for both 2D and 3D hierarchies.
 - [x] Add lightweight movement and collision primitives suitable for deterministic rhythm gameplay.
 - [x] Create a resource registry that separates authoring identifiers from runtime handles.
-- [ ] Add configuration loading for engine settings, input bindings, and mode configuration.
+- [x] Add configuration loading for engine settings, input bindings, and mode configuration.
 - [x] Add an event or messaging strategy for subsystem communication without tight coupling.
 - [x] Implement deterministic random number generation and seed management.
 - [x] Add replay recording scaffolding for input streams and authoritative state checkpoints.

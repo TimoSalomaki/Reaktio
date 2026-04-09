@@ -7,11 +7,13 @@
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/GameModeRegistry.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
+#include "reaktio/gameplay/ModeConfiguration.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
 #include "reaktio/gameplay/TransportStub.hpp"
 #include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/platform/FrameClock.hpp"
+#include "reaktio/platform/InputBindings.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 #include "reaktio/platform/StackProbe.hpp"
@@ -39,6 +41,9 @@ struct SmokeApplicationDependencies {
     platform::StackProbe stack_probe;
     gameplay::GameModeRegistry game_mode_registry;
     std::ostream* log_stream{};
+    std::string configuration_source{"<defaults>"};
+    platform::InputBindingsConfig input_bindings;
+    gameplay::ModeConfigurationStore mode_configuration;
 };
 
 class SmokeApplication final : public gameplay::IModeHost {
@@ -50,10 +55,12 @@ class SmokeApplication final : public gameplay::IModeHost {
     [[nodiscard]] const foundation::RuntimeBudget& runtime_budget() const noexcept override;
     [[nodiscard]] const platform::StackProbe& stack_probe() const noexcept override;
     [[nodiscard]] const platform::InputSnapshot& input_snapshot() const noexcept override;
+    [[nodiscard]] const platform::InputBindingsConfig& input_bindings() const noexcept override;
     [[nodiscard]] const platform::FrameTiming& frame_timing() const noexcept override;
     [[nodiscard]] const platform::WindowState& window_state() const noexcept override;
     [[nodiscard]] foundation::DeterministicRandomService& random_service() noexcept override;
     [[nodiscard]] foundation::ResourceRegistry& resource_registry() noexcept override;
+    [[nodiscard]] const gameplay::ModeConfigurationStore& mode_configuration() const noexcept override;
     [[nodiscard]] gameplay::EventBus& event_bus() noexcept override;
     [[nodiscard]] gameplay::ReplayRecorder& replay() noexcept override;
     [[nodiscard]] gameplay::WorldModel& world_model() noexcept override;

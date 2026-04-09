@@ -274,6 +274,10 @@ const platform::InputSnapshot& SmokeApplication::input_snapshot() const noexcept
     return active_shell_->input_snapshot();
 }
 
+const platform::InputBindingsConfig& SmokeApplication::input_bindings() const noexcept {
+    return dependencies_.input_bindings;
+}
+
 const platform::FrameTiming& SmokeApplication::frame_timing() const noexcept {
     assert(active_shell_ != nullptr);
     return active_shell_->frame_timing();
@@ -290,6 +294,10 @@ foundation::DeterministicRandomService& SmokeApplication::random_service() noexc
 
 foundation::ResourceRegistry& SmokeApplication::resource_registry() noexcept {
     return resource_registry_;
+}
+
+const gameplay::ModeConfigurationStore& SmokeApplication::mode_configuration() const noexcept {
+    return dependencies_.mode_configuration;
 }
 
 gameplay::EventBus& SmokeApplication::event_bus() noexcept {
@@ -371,6 +379,22 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
         std::ostringstream seed_stream;
         seed_stream << "  random seed: 0x" << std::hex << dependencies_.random_seed;
         crash_safe_log_.write(foundation::LogLevel::Info, seed_stream.str());
+    }
+    crash_safe_log_.write(
+        foundation::LogLevel::Info,
+        "  config source: " + dependencies_.configuration_source);
+    {
+        std::ostringstream input_stream;
+        input_stream << "  input bindings: actions=" << dependencies_.input_bindings.action_count()
+                     << " bindings=" << dependencies_.input_bindings.binding_count();
+        crash_safe_log_.write(foundation::LogLevel::Info, input_stream.str());
+    }
+    {
+        const gameplay::ModeConfigurationSummary mode_summary = dependencies_.mode_configuration.summary();
+        std::ostringstream mode_stream;
+        mode_stream << "  mode config: modes=" << mode_summary.mode_count
+                    << " entries=" << mode_summary.entry_count;
+        crash_safe_log_.write(foundation::LogLevel::Info, mode_stream.str());
     }
     if (!dependencies_.startup_mode_id.empty()) {
         crash_safe_log_.write(

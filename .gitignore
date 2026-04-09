@@ -50,6 +50,8 @@
 # Generated runtime content
 /content/cooked/**
 !/content/cooked/.gitkeep
+!/content/cooked/config/
+!/content/cooked/config/runtime-smoke.ini
 
 # Runtime logs
 /logs/
