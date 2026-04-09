@@ -2,6 +2,7 @@
 
 #include "reaktio/foundation/CrashSafeLog.hpp"
 #include "reaktio/foundation/DeterministicRandom.hpp"
+#include "reaktio/foundation/ResourceRegistry.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/GameModeRegistry.hpp"
@@ -52,6 +53,7 @@ class SmokeApplication final : public gameplay::IModeHost {
     [[nodiscard]] const platform::FrameTiming& frame_timing() const noexcept override;
     [[nodiscard]] const platform::WindowState& window_state() const noexcept override;
     [[nodiscard]] foundation::DeterministicRandomService& random_service() noexcept override;
+    [[nodiscard]] foundation::ResourceRegistry& resource_registry() noexcept override;
     [[nodiscard]] gameplay::EventBus& event_bus() noexcept override;
     [[nodiscard]] gameplay::ReplayRecorder& replay() noexcept override;
     [[nodiscard]] gameplay::WorldModel& world_model() noexcept override;
@@ -68,6 +70,7 @@ class SmokeApplication final : public gameplay::IModeHost {
     SmokeApplicationDependencies dependencies_;
     foundation::TelemetryRecorder telemetry_recorder_;
     foundation::DeterministicRandomService random_service_;
+    foundation::ResourceRegistry resource_registry_;
     gameplay::EventBus event_bus_;
     gameplay::ReplayRecorder replay_recorder_;
     gameplay::WorldModel world_model_;

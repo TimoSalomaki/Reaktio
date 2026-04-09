@@ -209,6 +209,84 @@ void publish_replay_checkpoint_event(
         });
 }
 
+void seed_resources(
+    foundation::ResourceRegistry& resource_registry,
+    foundation::ResourceRegistrySummary& resource_summary,
+    foundation::ResourceHandle& cue_material_handle,
+    foundation::ResourceHandle& debug_font_handle,
+    bool& stale_debug_font_handle_valid) {
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::Texture,
+        "reference.sandbox.texture.cue",
+        "runtime.texture.cue");
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::Material,
+        "reference.sandbox.material.cue",
+        "runtime.material.cue");
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::Material,
+        "reference.sandbox.material.hit-window",
+        "runtime.material.hit-window");
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::Mesh,
+        "reference.sandbox.mesh.rig",
+        "runtime.mesh.rig");
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::ShaderProgram,
+        "reference.sandbox.shader.basic",
+        "runtime.shader.basic");
+
+    const foundation::ResourceHandle stale_font_handle = resource_registry.register_resource(
+        foundation::ResourceKind::Font,
+        "reference.sandbox.font.debug",
+        "runtime.font.debug.v1");
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::Font,
+        "reference.sandbox.font.debug",
+        "runtime.font.debug.v2");
+
+    cue_material_handle = {};
+    if (const foundation::ResourceRecord* resource = resource_registry.find(
+            foundation::ResourceKind::Material,
+            "reference.sandbox.material.cue");
+        resource != nullptr) {
+        cue_material_handle = resource->handle;
+    }
+
+    debug_font_handle = resource_registry.resolve(
+        foundation::ResourceKind::Font,
+        "reference.sandbox.font.debug");
+    stale_debug_font_handle_valid = resource_registry.contains(stale_font_handle);
+    resource_summary = resource_registry.summary();
+}
+
+void publish_resource_diagnostic(
+    gameplay::IModeHost& host,
+    const foundation::ResourceRegistrySummary& resource_summary,
+    foundation::ResourceHandle cue_material_handle,
+    foundation::ResourceHandle debug_font_handle,
+    bool stale_debug_font_handle_valid) {
+    std::ostringstream stream;
+    stream << "resources count=" << resource_summary.resource_count << " rev=" << resource_summary.revision
+           << " textures="
+           << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Texture)]
+           << " materials="
+           << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Material)]
+            << " shaders="
+            << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::ShaderProgram)]
+           << " meshes=" << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Mesh)]
+           << " fonts=" << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)]
+           << " cue-material=" << cue_material_handle.value() << " debug-font=" << debug_font_handle.value()
+           << " stale-valid=" << stale_debug_font_handle_valid;
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        0,
+        gameplay::DiagnosticEvent{
+            .message = stream.str(),
+        });
+}
+
 void seed_world(gameplay::IModeHost& host) {
     gameplay::WorldModel& world = host.world_model();
 
@@ -449,22 +527,33 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     fixed_steps_ = 0;
     transport_roll_ = 0;
     visual_roll_ = 0;
+    resource_summary_ = {};
+    cue_material_handle_ = {};
+    debug_font_handle_ = {};
+    stale_debug_font_handle_valid_ = false;
     world_entity_count_ = 0;
     average_phase_ = 0.0f;
     sample_cue_world_x_ = 0.0f;
     sample_tip_world_ = {};
     collision_signature_ = 0;
+    collision_topology_ = 0;
     last_published_collision_topology_ = static_cast<std::uint64_t>(-1);
     motion_report_ = {};
     collision_report_ = {};
     propagation_report_ = {};
 
+    seed_resources(
+        host.resource_registry(),
+        resource_summary_,
+        cue_material_handle_,
+        debug_font_handle_,
+        stale_debug_font_handle_valid_);
     seed_world(host);
     propagate_and_refresh(
         propagation_report_,
         collision_report_,
         collision_signature_,
-        last_published_collision_topology_,
+        collision_topology_,
         world_entity_count_,
         average_phase_,
         sample_cue_world_x_,
@@ -473,6 +562,12 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         motion_report_,
         fixed_steps_,
         host);
+    publish_resource_diagnostic(
+        host,
+        resource_summary_,
+        cue_material_handle_,
+        debug_font_handle_,
+        stale_debug_font_handle_valid_);
 
     gameplay::ITransportControl& transport = host.transport();
     transport.stop();
@@ -551,7 +646,7 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
         propagation_report_,
         collision_report_,
         collision_signature_,
-        last_published_collision_topology_,
+        collision_topology_,
         world_entity_count_,
         average_phase_,
         sample_cue_world_x_,
@@ -675,6 +770,22 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                       << " pen=" << collision_report_.contacts.front().penetration;
     }
     host.render_extraction().add_debug_text(0, 16, 0x0d, motion_stream.str());
+
+    std::ostringstream resource_stream;
+    resource_stream << "resources count=" << resource_summary_.resource_count << " rev=" << resource_summary_.revision
+                    << " tex="
+                    << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::Texture)]
+                    << " mat="
+                    << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::Material)]
+                    << " shader="
+                    << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::ShaderProgram)]
+                    << " mesh="
+                    << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::Mesh)]
+                    << " font="
+                    << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)]
+                    << " cue=" << cue_material_handle_.value() << " debug=" << debug_font_handle_.value()
+                    << " stale=" << stale_debug_font_handle_valid_;
+    host.render_extraction().add_debug_text(0, 17, 0x0c, resource_stream.str());
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {

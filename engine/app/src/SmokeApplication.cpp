@@ -106,6 +106,7 @@ int SmokeApplication::run() {
         std::string("Running mode: ") + std::string(mode->descriptor().display_name) + " (" +
             std::string(mode->descriptor().id) + ")");
 
+    resource_registry_.clear();
     event_bus_.reset();
     world_model_.reset();
     replay_recorder_.begin_session(gameplay::ReplaySessionMetadata{
@@ -213,6 +214,18 @@ int SmokeApplication::run() {
     }
 
     {
+        const foundation::ResourceRegistrySummary summary = resource_registry_.summary();
+        std::ostringstream resource_stream;
+        resource_stream << "Resource registry: resources=" << summary.resource_count << " revision=" << summary.revision
+                        << " textures=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Texture)]
+                        << " materials=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Material)]
+                        << " shaders=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::ShaderProgram)]
+                        << " meshes=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Mesh)]
+                        << " fonts=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)];
+        crash_safe_log_.write(foundation::LogLevel::Info, resource_stream.str());
+    }
+
+    {
         std::ostringstream replay_stream;
         replay_stream << "Replay capture: inputs=" << replay_recorder_.input_frame_count() << " checkpoints="
                       << replay_recorder_.checkpoint_count();
@@ -233,6 +246,7 @@ int SmokeApplication::run() {
     }
 
     world_model_.reset();
+    resource_registry_.clear();
 
     if (const foundation::TelemetrySnapshot* snapshot = telemetry_recorder_.last()) {
         crash_safe_log_.write(
@@ -272,6 +286,10 @@ const platform::WindowState& SmokeApplication::window_state() const noexcept {
 
 foundation::DeterministicRandomService& SmokeApplication::random_service() noexcept {
     return random_service_;
+}
+
+foundation::ResourceRegistry& SmokeApplication::resource_registry() noexcept {
+    return resource_registry_;
 }
 
 gameplay::EventBus& SmokeApplication::event_bus() noexcept {

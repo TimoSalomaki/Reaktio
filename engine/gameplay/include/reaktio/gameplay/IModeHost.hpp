@@ -2,6 +2,7 @@
 
 namespace reaktio::foundation {
 class DeterministicRandomService;
+class ResourceRegistry;
 class TelemetryRecorder;
 struct RuntimeBudget;
 } // namespace reaktio::foundation
@@ -36,6 +37,7 @@ class IModeHost {
     [[nodiscard]] virtual const platform::FrameTiming& frame_timing() const noexcept = 0;
     [[nodiscard]] virtual const platform::WindowState& window_state() const noexcept = 0;
     [[nodiscard]] virtual foundation::DeterministicRandomService& random_service() noexcept = 0;
+    [[nodiscard]] virtual foundation::ResourceRegistry& resource_registry() noexcept = 0;
     [[nodiscard]] virtual EventBus& event_bus() noexcept = 0;
     [[nodiscard]] virtual ReplayRecorder& replay() noexcept = 0;
     [[nodiscard]] virtual WorldModel& world_model() noexcept = 0;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "reaktio/foundation/ResourceRegistry.hpp"
 #include "reaktio/gameplay/IGameMode.hpp"
 #include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
@@ -23,11 +24,16 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::uint64_t fixed_steps_{};
     std::uint32_t transport_roll_{};
     std::uint32_t visual_roll_{};
+    foundation::ResourceRegistrySummary resource_summary_{};
+    foundation::ResourceHandle cue_material_handle_{};
+    foundation::ResourceHandle debug_font_handle_{};
+    bool stale_debug_font_handle_valid_{};
     std::size_t world_entity_count_{};
     float average_phase_{};
     float sample_cue_world_x_{};
     gameplay::Vector3 sample_tip_world_{};
     std::uint64_t collision_signature_{};
+    std::uint64_t collision_topology_{};
     std::uint64_t last_published_collision_topology_{static_cast<std::uint64_t>(-1)};
     gameplay::MotionIntegrationReport motion_report_{};
     gameplay::CollisionDetectionReport collision_report_{};

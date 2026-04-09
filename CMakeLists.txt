@@ -49,6 +49,7 @@ add_library(reaktio_foundation STATIC
     engine/foundation/src/BuildInfo.cpp
     engine/foundation/src/CrashSafeLog.cpp
     engine/foundation/src/DeterministicRandom.cpp
+    engine/foundation/src/ResourceRegistry.cpp
     engine/foundation/src/Telemetry.cpp
 )
 add_library(Reaktio::foundation ALIAS reaktio_foundation)
