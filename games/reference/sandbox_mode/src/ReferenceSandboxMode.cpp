@@ -116,6 +116,29 @@ std::uint64_t hash_collision_report(const gameplay::CollisionDetectionReport& co
     return hash;
 }
 
+std::uint64_t hash_collision_topology(const gameplay::CollisionDetectionReport& collision_report) noexcept {
+    std::uint64_t hash = 14695981039346656037ull;
+    hash ^= collision_report.circle_circle_contacts;
+    hash *= 1099511628211ull;
+    hash ^= collision_report.box_box_contacts;
+    hash *= 1099511628211ull;
+    hash ^= collision_report.circle_box_contacts;
+    hash *= 1099511628211ull;
+    hash ^= collision_report.skipped_missing_transforms;
+    hash *= 1099511628211ull;
+
+    for (const gameplay::CollisionContact2D& contact : collision_report.contacts) {
+        hash ^= contact.first.value();
+        hash *= 1099511628211ull;
+        hash ^= contact.second.value();
+        hash *= 1099511628211ull;
+        hash ^= static_cast<std::uint32_t>(contact.shape_pair);
+        hash *= 1099511628211ull;
+    }
+
+    return hash;
+}
+
 struct SandboxPulseCue {
     float phase{};
     float phase_velocity{};
@@ -342,12 +365,12 @@ void publish_transform_diagnostic(
 void publish_motion_collision_diagnostic(
     gameplay::IModeHost& host,
     std::uint64_t fixed_steps,
-    std::uint64_t collision_signature,
-    std::uint64_t& last_published_collision_signature,
+    std::uint64_t collision_topology,
+    std::uint64_t& last_published_collision_topology,
     const gameplay::MotionIntegrationReport& motion_report,
     const gameplay::CollisionDetectionReport& collision_report) {
     if (collision_report.skipped_missing_transforms == 0u &&
-        collision_signature == last_published_collision_signature) {
+        collision_topology == last_published_collision_topology) {
         return;
     }
 
@@ -369,7 +392,7 @@ void publish_motion_collision_diagnostic(
             .message = stream.str(),
         });
 
-    last_published_collision_signature = collision_signature;
+    last_published_collision_topology = collision_topology;
 }
 
 void refresh_transform_summary(
@@ -388,11 +411,12 @@ void propagate_and_refresh(
     gameplay::TransformPropagationReport& propagation_report,
     gameplay::CollisionDetectionReport& collision_report,
     std::uint64_t& collision_signature,
+    std::uint64_t& collision_topology,
     std::size_t& world_entity_count,
     float& average_phase,
     float& sample_cue_world_x,
     gameplay::Vector3& sample_tip_world,
-    std::uint64_t& last_published_collision_signature,
+    std::uint64_t& last_published_collision_topology,
     const gameplay::MotionIntegrationReport& motion_report,
     std::uint64_t fixed_steps,
     gameplay::IModeHost& host) {
@@ -400,12 +424,13 @@ void propagate_and_refresh(
     refresh_transform_summary(world_entity_count, average_phase, sample_cue_world_x, sample_tip_world, host.world_model());
     collision_report = gameplay::detect_collisions_2d(host.world_model());
     collision_signature = hash_collision_report(collision_report);
+    collision_topology = hash_collision_topology(collision_report);
     publish_transform_diagnostic(host, fixed_steps, propagation_report);
     publish_motion_collision_diagnostic(
         host,
         fixed_steps,
-        collision_signature,
-        last_published_collision_signature,
+        collision_topology,
+        last_published_collision_topology,
         motion_report,
         collision_report);
 }
@@ -429,7 +454,7 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     sample_cue_world_x_ = 0.0f;
     sample_tip_world_ = {};
     collision_signature_ = 0;
-    last_published_collision_signature_ = static_cast<std::uint64_t>(-1);
+    last_published_collision_topology_ = static_cast<std::uint64_t>(-1);
     motion_report_ = {};
     collision_report_ = {};
     propagation_report_ = {};
@@ -439,11 +464,12 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         propagation_report_,
         collision_report_,
         collision_signature_,
+        last_published_collision_topology_,
         world_entity_count_,
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
-        last_published_collision_signature_,
+        last_published_collision_topology_,
         motion_report_,
         fixed_steps_,
         host);
@@ -525,11 +551,12 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
         propagation_report_,
         collision_report_,
         collision_signature_,
+        last_published_collision_topology_,
         world_entity_count_,
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
-        last_published_collision_signature_,
+        last_published_collision_topology_,
         motion_report_,
         fixed_steps_,
         host);
