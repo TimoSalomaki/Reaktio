@@ -34,117 +34,92 @@ ResourceHandle ResourceRegistry::register_resource(
         return {};
     }
 
-    if (auto it = lookup_.find(LookupKey{.kind = kind, .authoring_id = std::string(authoring_id)}); it != lookup_.end()) {
-        const std::uint32_t index = slot_index(it->second);
-        if (index < slots_.size()) {
-            ResourceSlot& slot = slots_[index];
-            if (slot.occupied && slot.generation == generation(it->second)) {
-                slot.generation = next_generation(slot.generation);
-                const ResourceHandle handle = make_handle(index, slot.generation);
-                slot.record = ResourceRecord{
-                    .handle = handle,
-                    .kind = kind,
-                    .authoring_id = std::string(authoring_id),
-                    .runtime_label = runtime_label.empty() ? std::string(authoring_id) : std::string(runtime_label),
-                };
-                it->second = handle;
-                ++revision_;
-                return handle;
+    LookupKey key{
+        .kind = kind,
+        .authoring_id = std::string(authoring_id),
+    };
+    const std::string resolved_runtime_label = runtime_label.empty()
+        ? key.authoring_id
+        : std::string(runtime_label);
+
+    if (auto it = lookup_.find(key); it != lookup_.end()) {
+        const ResourceHandle replacement = records_.replace(
+            it->second,
+            ResourceRecord{
+                .kind = kind,
+                .authoring_id = key.authoring_id,
+                .runtime_label = resolved_runtime_label,
+            });
+        if (replacement.valid()) {
+            if (ResourceRecord* record = records_.try_get(replacement)) {
+                record->handle = replacement;
             }
+            it->second = replacement;
+            ++revision_;
+            return replacement;
         }
 
         lookup_.erase(it);
     }
 
-    std::uint32_t index{};
-    if (free_indices_.empty()) {
-        index = static_cast<std::uint32_t>(slots_.size());
-        slots_.push_back(ResourceSlot{});
-    } else {
-        index = free_indices_.back();
-        free_indices_.pop_back();
-    }
-
-    ResourceSlot& slot = slots_[index];
-    if (slot.generation == 0u) {
-        slot.generation = 1u;
-    }
-
-    slot.occupied = true;
-    slot.record = ResourceRecord{
-        .handle = make_handle(index, slot.generation),
+    const ResourceHandle handle = records_.emplace(ResourceRecord{
         .kind = kind,
-        .authoring_id = std::string(authoring_id),
-        .runtime_label = runtime_label.empty() ? std::string(authoring_id) : std::string(runtime_label),
-    };
+        .authoring_id = key.authoring_id,
+        .runtime_label = resolved_runtime_label,
+    });
+    if (!handle.valid()) {
+        return {};
+    }
 
-    lookup_.emplace(LookupKey{.kind = kind, .authoring_id = slot.record.authoring_id}, slot.record.handle);
+    if (ResourceRecord* record = records_.try_get(handle)) {
+        record->handle = handle;
+    }
+
+    lookup_.emplace(std::move(key), handle);
     ++kind_counts_[to_index(kind)];
-    ++resource_count_;
     ++revision_;
-    return slot.record.handle;
+    return handle;
 }
 
 bool ResourceRegistry::release_resource(ResourceHandle handle) noexcept {
-    if (!handle.valid()) {
+    const ResourceRecord* record = records_.try_get(handle);
+    if (record == nullptr) {
         return false;
     }
 
-    const std::uint32_t index = slot_index(handle);
-    if (index >= slots_.size()) {
-        return false;
-    }
+    lookup_.erase(LookupKey{.kind = record->kind, .authoring_id = record->authoring_id});
+    --kind_counts_[to_index(record->kind)];
 
-    ResourceSlot& slot = slots_[index];
-    if (!slot.occupied || slot.generation != generation(handle) || slot.record.handle != handle) {
-        return false;
-    }
-
-    lookup_.erase(LookupKey{.kind = slot.record.kind, .authoring_id = slot.record.authoring_id});
-    --kind_counts_[to_index(slot.record.kind)];
-    --resource_count_;
-
-    slot.occupied = false;
-    slot.record = ResourceRecord{};
-    slot.generation = next_generation(slot.generation);
-    free_indices_.push_back(index);
+    (void)records_.erase(handle);
     ++revision_;
     return true;
 }
 
 void ResourceRegistry::clear() noexcept {
     lookup_.clear();
-    slots_.clear();
-    free_indices_.clear();
+    records_.clear();
     kind_counts_.fill(0);
-    resource_count_ = 0;
     revision_ = 0;
 }
 
 bool ResourceRegistry::contains(ResourceHandle handle) const noexcept {
-    return try_get(handle) != nullptr;
+    return records_.contains(handle);
 }
 
 const ResourceRecord* ResourceRegistry::try_get(ResourceHandle handle) const noexcept {
-    if (!handle.valid()) {
-        return nullptr;
-    }
+    return records_.try_get(handle);
+}
 
-    const std::uint32_t index = slot_index(handle);
-    if (index >= slots_.size()) {
-        return nullptr;
-    }
-
-    const ResourceSlot& slot = slots_[index];
-    if (!slot.occupied || slot.generation != generation(handle) || slot.record.handle != handle) {
-        return nullptr;
-    }
-
-    return &slot.record;
+BorrowedResourceRecord ResourceRegistry::borrow(ResourceHandle handle) const noexcept {
+    return records_.borrow(handle);
 }
 
 const ResourceRecord* ResourceRegistry::find(ResourceKind kind, std::string_view authoring_id) const noexcept {
     return try_get(resolve(kind, authoring_id));
+}
+
+BorrowedResourceRecord ResourceRegistry::find_borrow(ResourceKind kind, std::string_view authoring_id) const noexcept {
+    return borrow(resolve(kind, authoring_id));
 }
 
 ResourceHandle ResourceRegistry::resolve(ResourceKind kind, std::string_view authoring_id) const noexcept {
@@ -165,7 +140,7 @@ std::size_t ResourceRegistry::count(ResourceKind kind) const noexcept {
 }
 
 std::size_t ResourceRegistry::resource_count() const noexcept {
-    return resource_count_;
+    return records_.size();
 }
 
 std::uint64_t ResourceRegistry::revision() const noexcept {
@@ -174,28 +149,10 @@ std::uint64_t ResourceRegistry::revision() const noexcept {
 
 ResourceRegistrySummary ResourceRegistry::summary() const noexcept {
     return ResourceRegistrySummary{
-        .resource_count = resource_count_,
+        .resource_count = records_.size(),
         .revision = revision_,
         .counts_by_kind = kind_counts_,
     };
-}
-
-ResourceHandle ResourceRegistry::make_handle(std::uint32_t slot_index, std::uint32_t generation) noexcept {
-    return ResourceHandle{(static_cast<std::uint64_t>(generation) << 32u) | (static_cast<std::uint64_t>(slot_index) + 1u)};
-}
-
-std::uint32_t ResourceRegistry::slot_index(ResourceHandle handle) noexcept {
-    return handle.valid()
-        ? static_cast<std::uint32_t>((handle.value() & k_slot_mask) - 1u)
-        : std::numeric_limits<std::uint32_t>::max();
-}
-
-std::uint32_t ResourceRegistry::generation(ResourceHandle handle) noexcept {
-    return static_cast<std::uint32_t>(handle.value() >> 32u);
-}
-
-std::uint32_t ResourceRegistry::next_generation(std::uint32_t generation) noexcept {
-    return generation == std::numeric_limits<std::uint32_t>::max() ? 1u : generation + 1u;
 }
 
 } // namespace reaktio::foundation

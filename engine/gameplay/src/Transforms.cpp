@@ -1,5 +1,6 @@
 #include "reaktio/gameplay/Transforms.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -38,6 +39,48 @@ namespace {
         .rotation_radians = parent.rotation_radians + local.rotation_radians,
         .scale = component_mul(parent.scale, local.scale),
     };
+}
+
+[[nodiscard]] bool contains_entity(const std::vector<WorldEntity>& ancestry, WorldEntity entity) noexcept {
+    return std::find(ancestry.begin(), ancestry.end(), entity) != ancestry.end();
+}
+
+[[nodiscard]] bool resolve_transform_2d_recursive(
+    const WorldModel& world,
+    WorldEntity entity,
+    WorldTransform2D& transform,
+    std::vector<WorldEntity>& ancestry) noexcept {
+    if (const WorldTransform2D* world_transform = world.try_get<WorldTransform2D>(entity)) {
+        transform = *world_transform;
+        return true;
+    }
+
+    const LocalTransform2D* local_transform = world.try_get<LocalTransform2D>(entity);
+    if (local_transform == nullptr) {
+        return false;
+    }
+
+    if (const TransformParent* parent = world.try_get<TransformParent>(entity); parent != nullptr && parent->parent.valid()) {
+        if (!world.contains(parent->parent) || contains_entity(ancestry, parent->parent)) {
+            return false;
+        }
+
+        ancestry.push_back(entity);
+
+        WorldTransform2D parent_transform{};
+        const bool resolved_parent = resolve_transform_2d_recursive(world, parent->parent, parent_transform, ancestry);
+
+        ancestry.pop_back();
+        if (!resolved_parent) {
+            return false;
+        }
+
+        transform = compose(parent_transform, *local_transform);
+        return true;
+    }
+
+    transform = as_world(*local_transform);
+    return true;
 }
 
 [[nodiscard]] Vector3 add(Vector3 lhs, Vector3 rhs) noexcept {
@@ -225,6 +268,14 @@ Quaternion make_axis_angle_rotation(Vector3 axis, float angle_radians) noexcept 
         .z = normalized_axis.z * sine,
         .w = cosine,
     });
+}
+
+bool try_resolve_world_transform_2d(
+    const WorldModel& world,
+    WorldEntity entity,
+    WorldTransform2D& transform) noexcept {
+    std::vector<WorldEntity> ancestry;
+    return resolve_transform_2d_recursive(world, entity, transform, ancestry);
 }
 
 TransformPropagationReport propagate_transforms(WorldModel& world) {

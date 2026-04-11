@@ -91,72 +91,6 @@ struct ResolvedBoxCollider2D {
     });
 }
 
-[[nodiscard]] WorldTransform2D as_world(const LocalTransform2D& local) noexcept {
-    return WorldTransform2D{
-        .translation = local.translation,
-        .rotation_radians = local.rotation_radians,
-        .scale = local.scale,
-    };
-}
-
-[[nodiscard]] WorldTransform2D compose(const WorldTransform2D& parent, const LocalTransform2D& local) noexcept {
-    return WorldTransform2D{
-        .translation = add(parent.translation, rotate(component_mul(local.translation, parent.scale), parent.rotation_radians)),
-        .rotation_radians = parent.rotation_radians + local.rotation_radians,
-        .scale = component_mul(parent.scale, local.scale),
-    };
-}
-
-[[nodiscard]] bool contains_entity(const std::vector<WorldEntity>& ancestry, WorldEntity entity) noexcept {
-    return std::find(ancestry.begin(), ancestry.end(), entity) != ancestry.end();
-}
-
-[[nodiscard]] bool resolve_transform_2d_recursive(
-    const WorldModel& world,
-    WorldEntity entity,
-    WorldTransform2D& transform,
-    std::vector<WorldEntity>& ancestry) noexcept {
-    if (const WorldTransform2D* world_transform = world.try_get<WorldTransform2D>(entity)) {
-        transform = *world_transform;
-        return true;
-    }
-
-    const LocalTransform2D* local_transform = world.try_get<LocalTransform2D>(entity);
-    if (local_transform == nullptr) {
-        return false;
-    }
-
-    if (const TransformParent* parent = world.try_get<TransformParent>(entity); parent != nullptr && parent->parent.valid()) {
-        if (!world.contains(parent->parent) || contains_entity(ancestry, parent->parent)) {
-            return false;
-        }
-
-        ancestry.push_back(entity);
-
-        WorldTransform2D parent_transform{};
-        const bool resolved_parent = resolve_transform_2d_recursive(world, parent->parent, parent_transform, ancestry);
-
-        ancestry.pop_back();
-        if (!resolved_parent) {
-            return false;
-        }
-
-        transform = compose(parent_transform, *local_transform);
-        return true;
-    }
-
-    transform = as_world(*local_transform);
-    return true;
-}
-
-[[nodiscard]] bool resolve_transform_2d(
-    const WorldModel& world,
-    WorldEntity entity,
-    WorldTransform2D& transform) noexcept {
-    std::vector<WorldEntity> ancestry;
-    return resolve_transform_2d_recursive(world, entity, transform, ancestry);
-}
-
 [[nodiscard]] CollisionFilter2D resolve_filter(const WorldModel& world, WorldEntity entity) noexcept {
     if (const CollisionFilter2D* filter = world.try_get<CollisionFilter2D>(entity)) {
         return *filter;
@@ -176,7 +110,7 @@ struct ResolvedBoxCollider2D {
     ResolvedCircleCollider2D& resolved,
     std::size_t& skipped_missing_transforms) noexcept {
     WorldTransform2D transform{};
-    if (!resolve_transform_2d(world, entity, transform)) {
+    if (!try_resolve_world_transform_2d(world, entity, transform)) {
         ++skipped_missing_transforms;
         return false;
     }
@@ -199,7 +133,7 @@ struct ResolvedBoxCollider2D {
     ResolvedBoxCollider2D& resolved,
     std::size_t& skipped_missing_transforms) noexcept {
     WorldTransform2D transform{};
-    if (!resolve_transform_2d(world, entity, transform)) {
+    if (!try_resolve_world_transform_2d(world, entity, transform)) {
         ++skipped_missing_transforms;
         return false;
     }

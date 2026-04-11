@@ -2,6 +2,7 @@
 
 #include "reaktio/foundation/DeterministicRandom.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
+#include "reaktio/gameplay/DebugVisualizations.hpp"
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ModeConfiguration.hpp"
@@ -25,6 +26,10 @@
 namespace reaktio::games::reference {
 
 namespace {
+
+constexpr std::array<float, 3> k_lane_root_x{-240.0f, 0.0f, 240.0f};
+constexpr std::array<float, 3> k_lane_center_y{-120.0f, 0.0f, 120.0f};
+constexpr std::array<float, 3> k_lane_velocity_x{72.0f, -48.0f, 60.0f};
 
 const gameplay::ModeDescriptor k_descriptor{
     .id = "mode.reference.sandbox",
@@ -254,15 +259,17 @@ void publish_replay_checkpoint_event(
 void seed_resources(
     foundation::ResourceRegistry& resource_registry,
     foundation::ResourceRegistrySummary& resource_summary,
+    foundation::ResourceHandle& cue_texture_handle,
+    std::string& cue_texture_runtime_label,
     foundation::ResourceHandle& cue_material_handle,
+    std::string& cue_material_runtime_label,
+    foundation::ResourceHandle& rig_mesh_handle,
+    std::string& rig_mesh_runtime_label,
     foundation::ResourceHandle& debug_font_handle,
-    bool& stale_debug_font_handle_valid,
+    std::string& debug_font_runtime_label,
+    bool& stale_debug_font_borrow_valid,
     std::string_view cue_material_authoring_id,
     std::string_view debug_font_authoring_id) {
-    (void)resource_registry.register_resource(
-        foundation::ResourceKind::Texture,
-        "reference.sandbox.texture.cue",
-        "runtime.texture.cue");
     (void)resource_registry.register_resource(
         foundation::ResourceKind::Material,
         "reference.sandbox.material.cue",
@@ -272,35 +279,57 @@ void seed_resources(
         "reference.sandbox.material.hit-window",
         "runtime.material.hit-window");
     (void)resource_registry.register_resource(
-        foundation::ResourceKind::Mesh,
-        "reference.sandbox.mesh.rig",
-        "runtime.mesh.rig");
-    (void)resource_registry.register_resource(
         foundation::ResourceKind::ShaderProgram,
         "reference.sandbox.shader.basic",
         "runtime.shader.basic");
 
-    const foundation::ResourceHandle stale_font_handle = resource_registry.register_resource(
-        foundation::ResourceKind::Font,
-        "reference.sandbox.font.debug",
-        "runtime.font.debug.v1");
-    (void)resource_registry.register_resource(
-        foundation::ResourceKind::Font,
-        "reference.sandbox.font.debug",
-        "runtime.font.debug.v2");
-
-    cue_material_handle = {};
-    if (const foundation::ResourceRecord* resource = resource_registry.find(
-            foundation::ResourceKind::Material,
-            cue_material_authoring_id);
-        resource != nullptr) {
-        cue_material_handle = resource->handle;
+    cue_texture_runtime_label.clear();
+    const foundation::BorrowedResourceRecord cue_texture = resource_registry.find_borrow(
+        foundation::ResourceKind::Texture,
+        "reference.sandbox.texture.cue");
+    cue_texture_handle = cue_texture.handle();
+    if (cue_texture) {
+        cue_texture_runtime_label = cue_texture->runtime_label;
     }
 
-    debug_font_handle = resource_registry.resolve(
+    rig_mesh_runtime_label.clear();
+    const foundation::BorrowedResourceRecord rig_mesh = resource_registry.find_borrow(
+        foundation::ResourceKind::Mesh,
+        "reference.sandbox.mesh.rig");
+    rig_mesh_handle = rig_mesh.handle();
+    if (rig_mesh) {
+        rig_mesh_runtime_label = rig_mesh->runtime_label;
+    }
+
+    const foundation::ResourceHandle stale_font_handle = resource_registry.register_resource(
+        foundation::ResourceKind::Font,
+        "reference.sandbox.font.debug.hot-reload",
+        "runtime.font.debug.hot-reload.v1");
+    const foundation::BorrowedResourceRecord stale_font_borrow = resource_registry.borrow(stale_font_handle);
+    (void)resource_registry.register_resource(
+        foundation::ResourceKind::Font,
+        "reference.sandbox.font.debug.hot-reload",
+        "runtime.font.debug.hot-reload.v2");
+
+    cue_material_runtime_label.clear();
+    const foundation::BorrowedResourceRecord cue_material = resource_registry.find_borrow(
+        foundation::ResourceKind::Material,
+        cue_material_authoring_id);
+    cue_material_handle = cue_material.handle();
+    if (cue_material) {
+        cue_material_runtime_label = cue_material->runtime_label;
+    }
+
+    debug_font_runtime_label.clear();
+    const foundation::BorrowedResourceRecord debug_font = resource_registry.find_borrow(
         foundation::ResourceKind::Font,
         debug_font_authoring_id);
-    stale_debug_font_handle_valid = resource_registry.contains(stale_font_handle);
+    debug_font_handle = debug_font.handle();
+    if (debug_font) {
+        debug_font_runtime_label = debug_font->runtime_label;
+    }
+
+    stale_debug_font_borrow_valid = static_cast<bool>(stale_font_borrow);
     resource_summary = resource_registry.summary();
 }
 
@@ -340,9 +369,15 @@ void publish_input_binding_diagnostic(
 void publish_resource_diagnostic(
     gameplay::IModeHost& host,
     const foundation::ResourceRegistrySummary& resource_summary,
+    foundation::ResourceHandle cue_texture_handle,
+    std::string_view cue_texture_runtime_label,
     foundation::ResourceHandle cue_material_handle,
+    std::string_view cue_material_runtime_label,
+    foundation::ResourceHandle rig_mesh_handle,
+    std::string_view rig_mesh_runtime_label,
     foundation::ResourceHandle debug_font_handle,
-    bool stale_debug_font_handle_valid) {
+    std::string_view debug_font_runtime_label,
+    bool stale_debug_font_borrow_valid) {
     std::ostringstream stream;
     stream << "resources count=" << resource_summary.resource_count << " rev=" << resource_summary.revision
            << " textures="
@@ -353,8 +388,11 @@ void publish_resource_diagnostic(
             << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::ShaderProgram)]
            << " meshes=" << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Mesh)]
            << " fonts=" << resource_summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)]
-           << " cue-material=" << cue_material_handle.value() << " debug-font=" << debug_font_handle.value()
-           << " stale-valid=" << stale_debug_font_handle_valid;
+               << " cue-texture=" << cue_texture_handle.value() << '/' << cue_texture_runtime_label
+               << " cue-material=" << cue_material_handle.value() << '/' << cue_material_runtime_label
+               << " rig-mesh=" << rig_mesh_handle.value() << '/' << rig_mesh_runtime_label
+               << " debug-font=" << debug_font_handle.value() << '/' << debug_font_runtime_label
+               << " stale-borrow=" << stale_debug_font_borrow_valid;
     host.event_bus().publish(
         "mode.reference.sandbox",
         host.frame_timing().frame_index,
@@ -371,19 +409,17 @@ void seed_world(
     float hit_window_half_height) {
     gameplay::WorldModel& world = host.world_model();
 
-    constexpr std::array<float, 3> k_spawn_x{-240.0f, 0.0f, 240.0f};
-    constexpr std::array<float, 3> k_velocity_x{72.0f, -48.0f, 60.0f};
     constexpr std::array<float, 3> k_phase_velocity{0.07f, 0.11f, 0.05f};
     constexpr std::array<float, 3> k_angular_velocity{0.35f, -0.28f, 0.22f};
 
-    for (std::size_t index = 0; index < k_spawn_x.size(); ++index) {
+    for (std::size_t index = 0; index < k_lane_root_x.size(); ++index) {
         const gameplay::WorldEntity lane_root = world.create_entity("reference.sandbox.lane-root");
         world.emplace<gameplay::LocalTransform2D>(
             lane_root,
             gameplay::LocalTransform2D{
                 .translation = {
-                    .x = k_spawn_x[index],
-                    .y = -120.0f + static_cast<float>(index) * 120.0f,
+                    .x = k_lane_root_x[index],
+                    .y = k_lane_center_y[index],
                 },
             });
 
@@ -408,7 +444,7 @@ void seed_world(
         world.emplace<gameplay::LocalTransform2D>(cue, gameplay::LocalTransform2D{});
         world.emplace<gameplay::LinearVelocity2D>(
             cue,
-            gameplay::LinearVelocity2D{.units_per_second = {.x = k_velocity_x[index] * velocity_scale, .y = 0.0f}});
+            gameplay::LinearVelocity2D{.units_per_second = {.x = k_lane_velocity_x[index] * velocity_scale, .y = 0.0f}});
         world.emplace<gameplay::AngularVelocity2D>(
             cue,
             gameplay::AngularVelocity2D{.radians_per_second = k_angular_velocity[index]});
@@ -616,9 +652,15 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     configured_cue_material_authoring_id_ = "reference.sandbox.material.cue";
     configured_debug_font_authoring_id_ = "reference.sandbox.font.debug";
     resource_summary_ = {};
+    cue_texture_handle_ = {};
+    cue_texture_runtime_label_.clear();
     cue_material_handle_ = {};
+    cue_material_runtime_label_.clear();
+    rig_mesh_handle_ = {};
+    rig_mesh_runtime_label_.clear();
     debug_font_handle_ = {};
-    stale_debug_font_handle_valid_ = false;
+    debug_font_runtime_label_.clear();
+    stale_debug_font_borrow_valid_ = false;
     world_entity_count_ = 0;
     average_phase_ = 0.0f;
     sample_cue_world_x_ = 0.0f;
@@ -648,9 +690,15 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     seed_resources(
         host.resource_registry(),
         resource_summary_,
+        cue_texture_handle_,
+        cue_texture_runtime_label_,
         cue_material_handle_,
+        cue_material_runtime_label_,
+        rig_mesh_handle_,
+        rig_mesh_runtime_label_,
         debug_font_handle_,
-        stale_debug_font_handle_valid_,
+        debug_font_runtime_label_,
+        stale_debug_font_borrow_valid_,
         configured_cue_material_authoring_id_,
         configured_debug_font_authoring_id_);
     seed_world(
@@ -674,9 +722,15 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     publish_resource_diagnostic(
         host,
         resource_summary_,
+        cue_texture_handle_,
+        cue_texture_runtime_label_,
         cue_material_handle_,
+        cue_material_runtime_label_,
+        rig_mesh_handle_,
+        rig_mesh_runtime_label_,
         debug_font_handle_,
-        stale_debug_font_handle_valid_);
+        debug_font_runtime_label_,
+        stale_debug_font_borrow_valid_);
     publish_mode_config_diagnostic(host, fixed_steps_, mode_config);
     publish_input_binding_diagnostic(
         host,
@@ -898,8 +952,11 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                     << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::Mesh)]
                     << " font="
                     << resource_summary_.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)]
-                    << " cue=" << cue_material_handle_.value() << " debug=" << debug_font_handle_.value()
-                    << " stale=" << stale_debug_font_handle_valid_;
+                    << " tex-h=" << cue_texture_handle_.value() << '/' << cue_texture_runtime_label_
+                    << " cue=" << cue_material_handle_.value() << '/' << cue_material_runtime_label_
+                    << " mesh-h=" << rig_mesh_handle_.value() << '/' << rig_mesh_runtime_label_
+                    << " debug=" << debug_font_handle_.value() << '/' << debug_font_runtime_label_
+                    << " stale=" << stale_debug_font_borrow_valid_;
     host.render_extraction().add_debug_text(0, 17, 0x0c, resource_stream.str());
 
     std::ostringstream config_stream;
@@ -913,6 +970,135 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     binding_stream << "bindings pause=" << configured_transport_pause_binding_
                    << " restart=" << configured_transport_restart_binding_;
     host.render_extraction().add_debug_text(0, 19, 0x0a, binding_stream.str());
+
+    // Exercise the new render paths: sprites for cue positions, debug shapes for hit windows,
+    // and lines for lane baselines.
+    host.world_model().for_each<gameplay::WorldTransform2D, SandboxLaneCue>(
+        [&](gameplay::WorldEntity, const gameplay::WorldTransform2D& transform, const SandboxLaneCue& lane) {
+            const float lane_hue = static_cast<float>(lane.lane_index) * 0.33f;
+            host.render_extraction().add_sprite(render::SpriteCommand{
+                .view = render::RenderView::MainScene,
+                .position = {transform.translation.x, transform.translation.y},
+                .size = {36.0f, 36.0f},
+                .rotation_radians = transform.rotation_radians,
+                .color = {0.4f + lane_hue, 0.8f - lane_hue * 0.5f, 0.9f, 0.8f},
+            });
+        });
+
+    gameplay::emit_collision_debug_visualizations(
+        host.render_extraction(),
+        host.world_model(),
+        &collision_report_,
+        gameplay::CollisionDebugVisualizationStyle{});
+
+    std::array<gameplay::CueLaneDebugVisualization, 3> lane_visualizations{};
+    for (std::size_t lane = 0; lane < lane_visualizations.size(); ++lane) {
+        const float lane_center_y = k_lane_center_y[lane];
+        const float timing_line_x = k_lane_root_x[lane];
+        const float lane_velocity_x = k_lane_velocity_x[lane] * configured_velocity_scale_;
+        const float spawn_offset = lane_velocity_x >= 0.0f ? -180.0f : 180.0f;
+        lane_visualizations[lane] = gameplay::CueLaneDebugVisualization{
+            .lane_start_x = -400.0f,
+            .lane_end_x = 400.0f,
+            .center_y = lane_center_y,
+            .lane_rgba = 0x5050a0ffu,
+            .timing_line_x = timing_line_x,
+            .timing_line_half_height = configured_hit_window_half_height_ + 18.0f,
+            .timing_line_rgba = 0xffc040ffu,
+            .spawn_window_center = {.x = timing_line_x + spawn_offset, .y = lane_center_y},
+            .spawn_window_half_extents = {.x = 28.0f, .y = configured_hit_window_half_height_ + 8.0f},
+            .spawn_window_rgba = 0x4080ffffu,
+        };
+    }
+    gameplay::emit_cue_lane_debug_visualizations(host.render_extraction(), lane_visualizations);
+
+    render::QuadBatchCommand note_field_batch{
+        .view = render::RenderView::MainScene,
+    };
+    host.world_model().for_each<gameplay::WorldTransform2D, SandboxPulseCue>(
+        [&](gameplay::WorldEntity, const gameplay::WorldTransform2D& transform, const SandboxPulseCue& pulse) {
+            note_field_batch.quads.push_back(render::QuadBatchInstance{
+                .position = {transform.translation.x, transform.translation.y + 44.0f},
+                .size = {18.0f, 10.0f},
+                .rotation_radians = pulse.phase * 1.5f,
+                .color = {0.9f, 0.75f, 0.25f, 0.7f},
+            });
+        });
+    host.render_extraction().add_quad_batch(note_field_batch);
+
+    render::ParticleBatchCommand particle_batch{
+        .view = render::RenderView::MainScene,
+    };
+    for (int lane = 0; lane < 3; ++lane) {
+        const float lane_offset = static_cast<float>(lane) * 2.09439510f;
+        const float phase = static_cast<float>(interpolation_alpha) * 6.28318531f +
+                            lane_offset + static_cast<float>(visual_roll_) * 0.01f;
+        particle_batch.particles.push_back(render::ParticleInstance{
+            .position = {
+                -240.0f + static_cast<float>(lane) * 240.0f + static_cast<float>(std::cos(phase)) * 26.0f,
+                -120.0f + static_cast<float>(lane) * 120.0f + static_cast<float>(std::sin(phase)) * 20.0f,
+            },
+            .size = {10.0f, 10.0f},
+            .rotation_radians = phase,
+            .color = {0.35f, 0.8f, 1.0f, 0.55f},
+        });
+    }
+    host.render_extraction().add_particle_batch(particle_batch);
+
+    render::TransientGeometryCommand procedural_geometry{
+        .view = render::RenderView::MainScene,
+        .primitive = render::BufferPrimitive::Triangles,
+        .blend_mode = render::BufferBlendMode::Alpha,
+    };
+    const std::uint32_t geometry_color = 0x60d0ffffu;
+    procedural_geometry.vertices.push_back(render::TransientColorVertex{.x = -340.0f, .y = 220.0f, .z = 0.0f, .abgr = geometry_color});
+    procedural_geometry.vertices.push_back(render::TransientColorVertex{.x = -300.0f, .y = 180.0f, .z = 0.0f, .abgr = geometry_color});
+    procedural_geometry.vertices.push_back(render::TransientColorVertex{.x = -260.0f, .y = 220.0f, .z = 0.0f, .abgr = geometry_color});
+    procedural_geometry.vertices.push_back(render::TransientColorVertex{.x = -300.0f, .y = 180.0f, .z = 0.0f, .abgr = geometry_color});
+    procedural_geometry.vertices.push_back(render::TransientColorVertex{.x = -220.0f, .y = 180.0f, .z = 0.0f, .abgr = geometry_color});
+    procedural_geometry.vertices.push_back(render::TransientColorVertex{.x = -260.0f, .y = 220.0f, .z = 0.0f, .abgr = geometry_color});
+    host.render_extraction().add_transient_geometry(procedural_geometry);
+
+    render::InstancedQuadBatchCommand dense_note_batch{
+        .view = render::RenderView::MainScene,
+    };
+    dense_note_batch.quads.reserve(72u);
+    for (int lane = 0; lane < 3; ++lane) {
+        const float lane_y = -120.0f + static_cast<float>(lane) * 120.0f;
+        for (int note = 0; note < 24; ++note) {
+            const float note_phase = static_cast<float>(note) * 0.19f + static_cast<float>(lane) * 0.7f;
+            dense_note_batch.quads.push_back(render::InstancedQuadInstance{
+                .position = {
+                    -340.0f + static_cast<float>(note) * 28.0f,
+                    lane_y + std::sin(note_phase + static_cast<float>(interpolation_alpha) * 2.0f) * 10.0f,
+                },
+                .size = {12.0f, 12.0f},
+                .rotation_radians = note_phase * 0.3f,
+                .color = {0.85f, 0.35f + static_cast<float>(lane) * 0.15f, 0.95f, 0.65f},
+            });
+        }
+    }
+    host.render_extraction().add_instanced_quad_batch(dense_note_batch);
+
+    render::InstancedQuadBatchCommand obstacle_batch{
+        .view = render::RenderView::MainScene,
+    };
+    obstacle_batch.quads.reserve(24u);
+    for (int lane = 0; lane < 3; ++lane) {
+        const float lane_y = -120.0f + static_cast<float>(lane) * 120.0f;
+        for (int obstacle = 0; obstacle < 8; ++obstacle) {
+            obstacle_batch.quads.push_back(render::InstancedQuadInstance{
+                .position = {
+                    -280.0f + static_cast<float>(obstacle) * 80.0f,
+                    lane_y - 42.0f,
+                },
+                .size = {26.0f, 18.0f},
+                .rotation_radians = 0.0f,
+                .color = {0.25f, 0.9f, 0.45f, 0.55f},
+            });
+        }
+    }
+    host.render_extraction().add_instanced_quad_batch(obstacle_batch);
 }
 
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {

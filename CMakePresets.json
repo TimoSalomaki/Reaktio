@@ -12,7 +12,7 @@
       "generator": "Visual Studio 17 2022",
       "architecture": {
         "value": "x64",
-        "strategy": "external"
+        "strategy": "set"
       },
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {

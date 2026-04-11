@@ -178,7 +178,7 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 3 - Foundation, World, Mode Host, and Runtime Contracts
 
-- [ ] Create foundational utilities for IDs, handles, lifetime tracking, and ownership-safe resource access.
+- [x] Create foundational utilities for IDs, handles, lifetime tracking, and ownership-safe resource access.
 - [x] Establish the composition root so subsystems are wired explicitly rather than through hidden globals.
 - [x] Define a slim mode-host contract early, covering lifecycle, transport access, input surfaces, scoring callbacks, and render-extraction hooks.
 - [x] Register modes through compile-time descriptors or factories rather than runtime plugin loading in version 1.
@@ -199,14 +199,14 @@ These are support libraries, not replacements for SDL or bgfx.
 - [x] Create the render subsystem wrapper that owns bgfx initialization, reset, frame submission, and shutdown.
 - [x] Define a view or pass allocation policy so subsystems do not fight over bgfx view IDs.
 - [x] Implement camera abstractions for orthographic 2D, perspective 2.5D, and free 3D.
-- [ ] Implement sprite, quad, text, mesh, line, and debug-draw render paths.
-- [ ] Add material, shader program, and uniform management.
-- [ ] Add dynamic and transient buffer management for note fields, particles, and procedurally generated geometry.
-- [ ] Add texture, mesh, and font resource loading for cooked assets.
+- [x] Implement sprite, quad, text, mesh, line, and debug-draw render paths.
+- [x] Add material, shader program, and uniform management.
+- [x] Add dynamic and transient buffer management for note fields, particles, and procedurally generated geometry.
+- [x] Add texture, mesh, and font resource loading for cooked assets.
 - [x] Implement render extraction so gameplay produces render packets rather than calling bgfx directly.
-- [ ] Add batch and instancing paths for large note counts and repeated obstacles.
+- [x] Add batch and instancing paths for large note counts and repeated obstacles.
 - [ ] Add a simple post-processing chain for color grading, bloom, vignette, and screen-space feedback.
-- [ ] Add debug visualizations for collision shapes, cue lanes, timing lines, and spawn windows.
+- [x] Add debug visualizations for collision shapes, cue lanes, timing lines, and spawn windows.
 
 ### Phase 5 - Audio, Transport, and Rhythm Core
 

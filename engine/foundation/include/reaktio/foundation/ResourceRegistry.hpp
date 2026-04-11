@@ -1,5 +1,6 @@
 #pragma once
 
+#include "reaktio/foundation/HandleMap.hpp"
 #include "reaktio/foundation/StrongId.hpp"
 
 #include <array>
@@ -70,6 +71,9 @@ struct ResourceRegistrySummary {
     std::array<std::size_t, resource_kind_count()> counts_by_kind{};
 };
 
+using ResourceRecordStorage = HandleMap<ResourceHandleTag, ResourceRecord>;
+using BorrowedResourceRecord = ResourceRecordStorage::ConstBorrowed;
+
 class ResourceRegistry {
   public:
     [[nodiscard]] ResourceHandle register_resource(
@@ -81,7 +85,9 @@ class ResourceRegistry {
 
     [[nodiscard]] bool contains(ResourceHandle handle) const noexcept;
     [[nodiscard]] const ResourceRecord* try_get(ResourceHandle handle) const noexcept;
+    [[nodiscard]] BorrowedResourceRecord borrow(ResourceHandle handle) const noexcept;
     [[nodiscard]] const ResourceRecord* find(ResourceKind kind, std::string_view authoring_id) const noexcept;
+    [[nodiscard]] BorrowedResourceRecord find_borrow(ResourceKind kind, std::string_view authoring_id) const noexcept;
     [[nodiscard]] ResourceHandle resolve(ResourceKind kind, std::string_view authoring_id) const noexcept;
     [[nodiscard]] std::size_t count(ResourceKind kind) const noexcept;
     [[nodiscard]] std::size_t resource_count() const noexcept;
@@ -100,23 +106,11 @@ class ResourceRegistry {
         [[nodiscard]] std::size_t operator()(const LookupKey& key) const noexcept;
     };
 
-    struct ResourceSlot {
-        ResourceRecord record{};
-        std::uint32_t generation{1};
-        bool occupied{};
-    };
-
     [[nodiscard]] static bool is_valid_kind(ResourceKind kind) noexcept;
-    [[nodiscard]] static ResourceHandle make_handle(std::uint32_t slot_index, std::uint32_t generation) noexcept;
-    [[nodiscard]] static std::uint32_t slot_index(ResourceHandle handle) noexcept;
-    [[nodiscard]] static std::uint32_t generation(ResourceHandle handle) noexcept;
-    [[nodiscard]] static std::uint32_t next_generation(std::uint32_t generation) noexcept;
 
     std::unordered_map<LookupKey, ResourceHandle, LookupKeyHash> lookup_;
-    std::vector<ResourceSlot> slots_;
-    std::vector<std::uint32_t> free_indices_;
+    ResourceRecordStorage records_;
     std::array<std::size_t, resource_kind_count()> kind_counts_{};
-    std::size_t resource_count_{};
     std::uint64_t revision_{};
 };
 

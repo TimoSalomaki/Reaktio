@@ -33,9 +33,15 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::string configured_cue_material_authoring_id_{"reference.sandbox.material.cue"};
     std::string configured_debug_font_authoring_id_{"reference.sandbox.font.debug"};
     foundation::ResourceRegistrySummary resource_summary_{};
+    foundation::ResourceHandle cue_texture_handle_{};
+    std::string cue_texture_runtime_label_{};
     foundation::ResourceHandle cue_material_handle_{};
+    std::string cue_material_runtime_label_{};
+    foundation::ResourceHandle rig_mesh_handle_{};
+    std::string rig_mesh_runtime_label_{};
     foundation::ResourceHandle debug_font_handle_{};
-    bool stale_debug_font_handle_valid_{};
+    std::string debug_font_runtime_label_{};
+    bool stale_debug_font_borrow_valid_{};
     std::size_t world_entity_count_{};
     float average_phase_{};
     float sample_cue_world_x_{};

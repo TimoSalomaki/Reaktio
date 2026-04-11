@@ -107,6 +107,22 @@ int SmokeApplication::run() {
             std::string(mode->descriptor().id) + ")");
 
     resource_registry_.clear();
+    if (!render_subsystem.load_cooked_assets(resource_registry_)) {
+        crash_safe_log_.write(foundation::LogLevel::Error, "Failed to load cooked render assets.");
+        active_shell_ = nullptr;
+        return 1;
+    }
+
+    if (dependencies_.application_config.debug.enable_startup_diagnostics) {
+        std::ostringstream asset_stream;
+        asset_stream << "  cooked assets: textures=" << render_subsystem.stats().loaded_textures
+                     << " meshes=" << render_subsystem.stats().loaded_meshes
+                     << " fonts=" << render_subsystem.stats().loaded_fonts
+                     << " bytes=" << render_subsystem.stats().loaded_asset_bytes
+                     << " source=" << render_subsystem.stats().cooked_asset_source;
+        crash_safe_log_.write(foundation::LogLevel::Info, asset_stream.str());
+    }
+
     event_bus_.reset();
     world_model_.reset();
     replay_recorder_.begin_session(gameplay::ReplaySessionMetadata{

@@ -52,6 +52,8 @@
 !/content/cooked/.gitkeep
 !/content/cooked/config/
 !/content/cooked/config/runtime-smoke.ini
+!/content/cooked/render/
+!/content/cooked/render/**
 
 # Runtime logs
 /logs/

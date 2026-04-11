@@ -8,6 +8,7 @@
 
 namespace reaktio::foundation {
 class CrashSafeLog;
+class ResourceRegistry;
 struct TelemetrySnapshot;
 } // namespace reaktio::foundation
 
@@ -31,6 +32,18 @@ struct RenderStats {
     std::uint32_t draw_calls{};
     std::uint32_t compute_calls{};
     std::uint32_t blit_calls{};
+    std::uint32_t transient_vertices{};
+    std::uint32_t transient_allocations{};
+    std::uint32_t transient_failed_allocations{};
+    std::uint32_t instanced_batches{};
+    std::uint32_t instanced_instances{};
+    std::uint32_t instancing_fallback_batches{};
+    std::uint32_t instance_failed_allocations{};
+    std::uint32_t loaded_textures{};
+    std::uint32_t loaded_meshes{};
+    std::uint32_t loaded_fonts{};
+    std::size_t loaded_asset_bytes{};
+    std::string_view cooked_asset_source{"<none>"};
     std::uint32_t reset_flags{};
     std::string_view renderer_name{"uninitialized"};
 };
@@ -44,6 +57,7 @@ class RenderSubsystem {
     RenderSubsystem& operator=(const RenderSubsystem&) = delete;
 
     bool initialize(const platform::WindowState& window_state);
+    bool load_cooked_assets(foundation::ResourceRegistry& resource_registry);
     void begin_frame(const platform::WindowState& window_state);
     void submit_extracted_frame(const RenderFramePackets& packets) noexcept;
     void draw_debug_overlay(

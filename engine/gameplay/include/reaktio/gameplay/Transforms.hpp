@@ -64,6 +64,10 @@ struct TransformPropagationReport {
 };
 
 [[nodiscard]] Quaternion make_axis_angle_rotation(Vector3 axis, float angle_radians) noexcept;
+[[nodiscard]] bool try_resolve_world_transform_2d(
+    const WorldModel& world,
+    WorldEntity entity,
+    WorldTransform2D& transform) noexcept;
 [[nodiscard]] TransformPropagationReport propagate_transforms(WorldModel& world);
 
 } // namespace reaktio::gameplay

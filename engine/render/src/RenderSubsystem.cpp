@@ -1,8 +1,12 @@
+#include "reaktio/render/CookedAssetLibrary.hpp"
+#include "reaktio/render/InstanceBufferAllocator.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 #include "reaktio/render/RenderSubsystem.hpp"
+#include "reaktio/render/TransientBufferAllocator.hpp"
 
 #include "reaktio/foundation/CrashSafeLog.hpp"
+#include "reaktio/foundation/ResourceRegistry.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/platform/FrameClock.hpp"
@@ -12,7 +16,9 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace reaktio::render {
@@ -23,6 +29,323 @@ std::string make_message(std::string_view prefix, std::string_view suffix) {
     std::string message(prefix);
     message.append(suffix);
     return message;
+}
+
+std::uint32_t color4_to_abgr(const Color4& c) noexcept {
+    const auto clamp_byte = [](float v) -> std::uint8_t {
+        return static_cast<std::uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    return (static_cast<std::uint32_t>(clamp_byte(c.a)) << 24u) |
+           (static_cast<std::uint32_t>(clamp_byte(c.b)) << 16u) |
+           (static_cast<std::uint32_t>(clamp_byte(c.g)) << 8u) |
+           static_cast<std::uint32_t>(clamp_byte(c.r));
+}
+
+void append_rotated_quad(
+    float center_x,
+    float center_y,
+    float half_width,
+    float half_height,
+    float rotation_radians,
+    std::uint32_t abgr,
+    std::vector<TransientColorVertex>& vertices) {
+    const float cos_r = std::cos(rotation_radians);
+    const float sin_r = std::sin(rotation_radians);
+    const float corners[4][2] = {
+        {-half_width, -half_height},
+        {half_width, -half_height},
+        {half_width, half_height},
+        {-half_width, half_height},
+    };
+
+    float rotated[4][2];
+    for (int i = 0; i < 4; ++i) {
+        rotated[i][0] = center_x + corners[i][0] * cos_r - corners[i][1] * sin_r;
+        rotated[i][1] = center_y + corners[i][0] * sin_r + corners[i][1] * cos_r;
+    }
+
+    const int indices[] = {0, 1, 2, 0, 2, 3};
+    for (int i = 0; i < 6; ++i) {
+        vertices.push_back(TransientColorVertex{
+            .x = rotated[indices[i]][0],
+            .y = rotated[indices[i]][1],
+            .z = 0.0f,
+            .abgr = abgr,
+        });
+    }
+}
+
+void append_instanced_quad_fallback(
+    const QuadInstanceData& instance,
+    std::vector<TransientColorVertex>& vertices) {
+    append_rotated_quad(
+        instance.position_x,
+        instance.position_y,
+        instance.size_x * 0.5f,
+        instance.size_y * 0.5f,
+        instance.rotation_radians,
+        instance.abgr,
+        vertices);
+}
+
+void append_line(
+    float start_x,
+    float start_y,
+    float end_x,
+    float end_y,
+    std::uint32_t abgr,
+    std::vector<TransientColorVertex>& vertices) {
+    vertices.push_back(TransientColorVertex{.x = start_x, .y = start_y, .z = 0.0f, .abgr = abgr});
+    vertices.push_back(TransientColorVertex{.x = end_x, .y = end_y, .z = 0.0f, .abgr = abgr});
+}
+
+void submit_vertices(
+    TransientBufferAllocator& allocator,
+    RenderView view,
+    BufferPrimitive primitive,
+    BufferBlendMode blend_mode,
+    std::span<const TransientColorVertex> vertices,
+    bool write_depth = false) {
+    (void)allocator.submit(TransientBufferSubmission{
+        .view = view,
+        .primitive = primitive,
+        .blend_mode = blend_mode,
+        .write_depth = write_depth,
+        .vertices = vertices,
+    });
+}
+
+void submit_sprites(
+    const std::vector<SpriteCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    constexpr std::size_t k_view_count = static_cast<std::size_t>(RenderView::Count);
+    std::array<std::vector<TransientColorVertex>, k_view_count> vertices_by_view;
+    for (const SpriteCommand& command : commands) {
+        append_rotated_quad(
+            command.position.x,
+            command.position.y,
+            command.size.x * 0.5f,
+            command.size.y * 0.5f,
+            command.rotation_radians,
+            color4_to_abgr(command.color),
+            vertices_by_view[to_view_id(command.view)]);
+    }
+
+    for (std::size_t view_index = 0; view_index < vertices_by_view.size(); ++view_index) {
+        submit_vertices(
+            allocator,
+            static_cast<RenderView>(view_index),
+            BufferPrimitive::Triangles,
+            BufferBlendMode::Alpha,
+            vertices_by_view[view_index]);
+    }
+}
+
+void submit_quad_batches(
+    const std::vector<QuadBatchCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    constexpr std::size_t k_view_count = static_cast<std::size_t>(RenderView::Count);
+    std::array<std::vector<TransientColorVertex>, k_view_count> vertices_by_view;
+    for (const QuadBatchCommand& command : commands) {
+        std::vector<TransientColorVertex>& view_vertices = vertices_by_view[to_view_id(command.view)];
+        for (const QuadBatchInstance& quad : command.quads) {
+            append_rotated_quad(
+                quad.position.x,
+                quad.position.y,
+                quad.size.x * 0.5f,
+                quad.size.y * 0.5f,
+                quad.rotation_radians,
+                color4_to_abgr(quad.color),
+                view_vertices);
+        }
+    }
+
+    for (std::size_t view_index = 0; view_index < vertices_by_view.size(); ++view_index) {
+        submit_vertices(
+            allocator,
+            static_cast<RenderView>(view_index),
+            BufferPrimitive::Triangles,
+            BufferBlendMode::Alpha,
+            vertices_by_view[view_index]);
+    }
+}
+
+void submit_instanced_quad_batches(
+    const std::vector<InstancedQuadBatchCommand>& commands,
+    InstanceBufferAllocator& instance_allocator,
+    TransientBufferAllocator& transient_allocator,
+    RenderStats& stats) {
+    constexpr std::size_t k_view_count = static_cast<std::size_t>(RenderView::Count);
+    std::array<std::vector<QuadInstanceData>, k_view_count> instances_by_view;
+    std::array<std::vector<TransientColorVertex>, k_view_count> fallback_vertices_by_view;
+
+    for (const InstancedQuadBatchCommand& command : commands) {
+        std::vector<QuadInstanceData>& view_instances = instances_by_view[to_view_id(command.view)];
+        view_instances.reserve(view_instances.size() + command.quads.size());
+        for (const InstancedQuadInstance& quad : command.quads) {
+            view_instances.push_back(QuadInstanceData{
+                .position_x = quad.position.x,
+                .position_y = quad.position.y,
+                .size_x = quad.size.x,
+                .size_y = quad.size.y,
+                .rotation_radians = quad.rotation_radians,
+                .abgr = color4_to_abgr(quad.color),
+            });
+        }
+    }
+
+    for (std::size_t view_index = 0; view_index < instances_by_view.size(); ++view_index) {
+        std::vector<QuadInstanceData>& instances = instances_by_view[view_index];
+        if (instances.empty()) {
+            continue;
+        }
+
+        if (instance_allocator.submit_quads(static_cast<RenderView>(view_index), instances)) {
+            ++stats.instanced_batches;
+            stats.instanced_instances += static_cast<std::uint32_t>(instances.size());
+            continue;
+        }
+
+        ++stats.instancing_fallback_batches;
+        std::vector<TransientColorVertex>& fallback_vertices = fallback_vertices_by_view[view_index];
+        fallback_vertices.reserve(instances.size() * 6u);
+        for (const QuadInstanceData& instance : instances) {
+            append_instanced_quad_fallback(instance, fallback_vertices);
+        }
+    }
+
+    for (std::size_t view_index = 0; view_index < fallback_vertices_by_view.size(); ++view_index) {
+        submit_vertices(
+            transient_allocator,
+            static_cast<RenderView>(view_index),
+            BufferPrimitive::Triangles,
+            BufferBlendMode::Alpha,
+            fallback_vertices_by_view[view_index]);
+    }
+}
+
+void submit_lines(
+    const std::vector<LineCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    constexpr std::size_t k_view_count = static_cast<std::size_t>(RenderView::Count);
+    std::array<std::vector<TransientColorVertex>, k_view_count> vertices_by_view;
+    for (const LineCommand& command : commands) {
+        append_line(
+            command.start.x,
+            command.start.y,
+            command.end.x,
+            command.end.y,
+            color4_to_abgr(command.color),
+            vertices_by_view[to_view_id(command.view)]);
+    }
+
+    for (std::size_t view_index = 0; view_index < vertices_by_view.size(); ++view_index) {
+        submit_vertices(
+            allocator,
+            static_cast<RenderView>(view_index),
+            BufferPrimitive::Lines,
+            BufferBlendMode::Alpha,
+            vertices_by_view[view_index]);
+    }
+}
+
+void submit_particle_batches(
+    const std::vector<ParticleBatchCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    constexpr std::size_t k_view_count = static_cast<std::size_t>(RenderView::Count);
+    std::array<std::vector<TransientColorVertex>, k_view_count> vertices_by_view;
+    for (const ParticleBatchCommand& command : commands) {
+        std::vector<TransientColorVertex>& view_vertices = vertices_by_view[to_view_id(command.view)];
+        for (const ParticleInstance& particle : command.particles) {
+            append_rotated_quad(
+                particle.position.x,
+                particle.position.y,
+                particle.size.x * 0.5f,
+                particle.size.y * 0.5f,
+                particle.rotation_radians,
+                color4_to_abgr(particle.color),
+                view_vertices);
+        }
+    }
+
+    for (std::size_t view_index = 0; view_index < vertices_by_view.size(); ++view_index) {
+        submit_vertices(
+            allocator,
+            static_cast<RenderView>(view_index),
+            BufferPrimitive::Triangles,
+            BufferBlendMode::Additive,
+            vertices_by_view[view_index]);
+    }
+}
+
+void submit_transient_geometry(
+    const std::vector<TransientGeometryCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    for (const TransientGeometryCommand& command : commands) {
+        submit_vertices(
+            allocator,
+            command.view,
+            command.primitive,
+            command.blend_mode,
+            command.vertices,
+            command.write_depth);
+    }
+}
+
+void submit_debug_lines(
+    const std::vector<DebugLineCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    std::vector<TransientColorVertex> vertices;
+    vertices.reserve(commands.size() * 2u);
+    for (const DebugLineCommand& command : commands) {
+        append_line(command.start.x, command.start.y, command.end.x, command.end.y, command.rgba, vertices);
+    }
+
+    submit_vertices(allocator, RenderView::MainScene, BufferPrimitive::Lines, BufferBlendMode::Alpha, vertices);
+}
+
+void submit_debug_rects(
+    const std::vector<DebugRectCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    std::vector<TransientColorVertex> vertices;
+    vertices.reserve(commands.size() * 8u);
+    for (const DebugRectCommand& command : commands) {
+        const float x0 = command.position.x - command.half_extents.x;
+        const float y0 = command.position.y - command.half_extents.y;
+        const float x1 = command.position.x + command.half_extents.x;
+        const float y1 = command.position.y + command.half_extents.y;
+
+        append_line(x0, y0, x1, y0, command.rgba, vertices);
+        append_line(x1, y0, x1, y1, command.rgba, vertices);
+        append_line(x1, y1, x0, y1, command.rgba, vertices);
+        append_line(x0, y1, x0, y0, command.rgba, vertices);
+    }
+
+    submit_vertices(allocator, RenderView::MainScene, BufferPrimitive::Lines, BufferBlendMode::Alpha, vertices);
+}
+
+void submit_debug_circles(
+    const std::vector<DebugCircleCommand>& commands,
+    TransientBufferAllocator& allocator) {
+    std::vector<TransientColorVertex> vertices;
+    for (const DebugCircleCommand& command : commands) {
+        const std::uint16_t segments = std::max<std::uint16_t>(command.segments, 3u);
+        const float step = 6.28318531f / static_cast<float>(segments);
+        vertices.reserve(vertices.size() + static_cast<std::size_t>(segments) * 2u);
+        for (std::uint16_t segment = 0; segment < segments; ++segment) {
+            const float angle0 = step * static_cast<float>(segment);
+            const float angle1 = step * static_cast<float>(segment + 1u);
+            append_line(
+                command.center.x + std::cos(angle0) * command.radius,
+                command.center.y + std::sin(angle0) * command.radius,
+                command.center.x + std::cos(angle1) * command.radius,
+                command.center.y + std::sin(angle1) * command.radius,
+                command.rgba,
+                vertices);
+        }
+    }
+
+    submit_vertices(allocator, RenderView::MainScene, BufferPrimitive::Lines, BufferBlendMode::Alpha, vertices);
 }
 
 bgfx::RendererType::Enum map_renderer_backend(platform::RendererBackendPreference preference) noexcept {
@@ -144,9 +467,32 @@ struct RenderSubsystem::Impl {
             .camera = make_default_orthographic_camera_2d(backbuffer_width, backbuffer_height),
         });
         bgfx::touch(to_view_id(RenderView::MainScene));
+        transient_buffers.begin_frame();
+        instance_buffers.begin_frame();
         debug_text_active_this_frame = false;
         debug_flags_this_frame = config.debug.enable_gpu_debug ? BGFX_DEBUG_STATS : BGFX_DEBUG_NONE;
         bgfx::setDebug(debug_flags_this_frame);
+        stats.instanced_batches = 0;
+        stats.instanced_instances = 0;
+        stats.instancing_fallback_batches = 0;
+        stats.instance_failed_allocations = 0;
+    }
+
+    bool load_cooked_assets(foundation::ResourceRegistry& resource_registry) {
+        if (!cooked_assets.load(resource_registry, *log)) {
+            return false;
+        }
+
+        const CookedAssetLibrarySummary& summary = cooked_assets.summary();
+        stats.loaded_textures = static_cast<std::uint32_t>(summary.texture_count);
+        stats.loaded_meshes = static_cast<std::uint32_t>(summary.mesh_count);
+        stats.loaded_fonts = static_cast<std::uint32_t>(summary.font_count);
+        stats.loaded_asset_bytes = summary.total_payload_bytes;
+        cooked_asset_source_storage = summary.loaded_from_manifest
+            ? summary.manifest_path.string()
+            : std::string("<none>");
+        stats.cooked_asset_source = cooked_asset_source_storage;
+        return true;
     }
 
     void submit_extracted_frame(const RenderFramePackets& packets) noexcept {
@@ -182,6 +528,26 @@ struct RenderSubsystem::Impl {
                 bgfx::dbgTextPrintf(command.x, command.y, command.attribute, "%s", command.text.c_str());
             }
         }
+
+        submit_sprites(packets.sprite_commands, transient_buffers);
+        submit_quad_batches(packets.quad_batch_commands, transient_buffers);
+        submit_instanced_quad_batches(
+            packets.instanced_quad_batch_commands,
+            instance_buffers,
+            transient_buffers,
+            stats);
+        submit_lines(packets.line_commands, transient_buffers);
+        submit_particle_batches(packets.particle_batch_commands, transient_buffers);
+        submit_transient_geometry(packets.transient_geometry_commands, transient_buffers);
+        submit_debug_lines(packets.debug_line_commands, transient_buffers);
+        submit_debug_rects(packets.debug_rect_commands, transient_buffers);
+        submit_debug_circles(packets.debug_circle_commands, transient_buffers);
+
+        const TransientBufferBudget& transient_budget = transient_buffers.budget();
+        stats.transient_vertices = transient_budget.allocated_vertices;
+        stats.transient_allocations = transient_budget.allocation_count;
+        stats.transient_failed_allocations = transient_budget.failed_allocations;
+        stats.instance_failed_allocations = instance_buffers.budget().failed_allocations;
     }
 
     void draw_debug_overlay(
@@ -248,6 +614,35 @@ struct RenderSubsystem::Impl {
             input_snapshot.text_input_events().size(),
             input_snapshot.text_editing_events().size(),
             input_snapshot.connected_gamepads().size());
+
+        bgfx::dbgTextPrintf(
+            0,
+            7,
+            0x0f,
+            "transient verts=%u alloc=%u failed=%u",
+            stats.transient_vertices,
+            stats.transient_allocations,
+            stats.transient_failed_allocations);
+
+            bgfx::dbgTextPrintf(
+                0,
+                8,
+                0x0f,
+                "instanced batches=%u instances=%u fallback=%u failed=%u",
+                stats.instanced_batches,
+                stats.instanced_instances,
+                stats.instancing_fallback_batches,
+                stats.instance_failed_allocations);
+
+            bgfx::dbgTextPrintf(
+                0,
+                9,
+                0x0f,
+                "assets tex=%u mesh=%u font=%u bytes=%zu",
+                stats.loaded_textures,
+                stats.loaded_meshes,
+                stats.loaded_fonts,
+                stats.loaded_asset_bytes);
     }
 
     void end_frame() {
@@ -261,6 +656,7 @@ struct RenderSubsystem::Impl {
 
     void shutdown() noexcept {
         if (stats.initialized) {
+            instance_buffers.shutdown();
             bgfx::shutdown();
             stats = RenderStats{};
             backbuffer_width = 0;
@@ -298,6 +694,9 @@ struct RenderSubsystem::Impl {
     void finalize_initialization() {
         stats.initialized = true;
         stats.using_headless_fallback = using_headless_fallback;
+        transient_buffers.set_vertex_budget(65536u);
+        instance_buffers.set_instance_budget(4096u);
+        (void)instance_buffers.initialize();
         configure_views();
         refresh_stats();
     }
@@ -373,6 +772,10 @@ struct RenderSubsystem::Impl {
     platform::ApplicationConfig config;
     foundation::CrashSafeLog* log;
     RenderStats stats;
+    CookedAssetLibrary cooked_assets;
+    std::string cooked_asset_source_storage{"<none>"};
+    TransientBufferAllocator transient_buffers;
+    InstanceBufferAllocator instance_buffers;
     std::uint16_t backbuffer_width{};
     std::uint16_t backbuffer_height{};
     std::uint32_t reset_flags{};
@@ -390,6 +793,10 @@ RenderSubsystem::~RenderSubsystem() = default;
 
 bool RenderSubsystem::initialize(const platform::WindowState& window_state) {
     return impl_->initialize(window_state);
+}
+
+bool RenderSubsystem::load_cooked_assets(foundation::ResourceRegistry& resource_registry) {
+    return impl_->load_cooked_assets(resource_registry);
 }
 
 void RenderSubsystem::begin_frame(const platform::WindowState& window_state) {

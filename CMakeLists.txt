@@ -66,6 +66,7 @@ target_compile_definitions(reaktio_foundation
 reaktio_configure_target(reaktio_foundation)
 
 add_library(reaktio_gameplay STATIC
+    engine/gameplay/src/DebugVisualizations.cpp
     engine/gameplay/src/EventBus.cpp
     engine/gameplay/src/GameModeRegistry.cpp
     engine/gameplay/src/ModeConfiguration.cpp
@@ -80,7 +81,7 @@ target_include_directories(reaktio_gameplay
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/gameplay/include"
 )
-target_link_libraries(reaktio_gameplay PUBLIC Reaktio::entt Reaktio::foundation Reaktio::platform_api)
+target_link_libraries(reaktio_gameplay PUBLIC Reaktio::entt Reaktio::foundation Reaktio::platform_api Reaktio::render_api)
 reaktio_configure_target(reaktio_gameplay)
 
 add_library(reaktio_platform STATIC
@@ -98,9 +99,15 @@ target_link_libraries(reaktio_platform PUBLIC Reaktio::foundation Reaktio::platf
 reaktio_configure_target(reaktio_platform)
 
 add_library(reaktio_render STATIC
+    engine/render/src/CookedAssetLibrary.cpp
+    engine/render/src/InstanceBufferAllocator.cpp
+    engine/render/src/MaterialRegistry.cpp
     engine/render/src/RenderCamera.cpp
     engine/render/src/RenderExtraction.cpp
     engine/render/src/RenderSubsystem.cpp
+    engine/render/src/ShaderProgramRegistry.cpp
+    engine/render/src/TransientBufferAllocator.cpp
+    engine/render/src/UniformRegistry.cpp
 )
 add_library(Reaktio::render ALIAS reaktio_render)
 target_include_directories(reaktio_render
