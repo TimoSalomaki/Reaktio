@@ -1,6 +1,9 @@
 #include "reaktio/app/SmokeApplication.hpp"
 
+#include "reaktio/app/AuthoritativeAudioTransport.hpp"
+#include "reaktio/audio/AudioClipLibrary.hpp"
 #include "reaktio/foundation/BuildInfo.hpp"
+#include "reaktio/platform/SdlAudioDevice.hpp"
 #include "reaktio/render/RenderSubsystem.hpp"
 #include "reaktio/platform/SdlApplicationShell.hpp"
 
@@ -9,6 +12,7 @@
 #include <cassert>
 #include <chrono>
 #include <filesystem>
+#include <iomanip>
 #include <sstream>
 #include <string>
 
@@ -60,6 +64,23 @@ int SmokeApplication::run() {
     }
 
     active_shell_ = &platform_shell;
+    platform::SdlAudioDevice audio_device{dependencies_.application_config.audio};
+    const bool audio_ready = audio_device.initialize();
+    if (!audio_ready && dependencies_.application_config.audio.fail_if_unavailable) {
+        crash_safe_log_.write(
+            foundation::LogLevel::Error,
+            "Failed to initialize required audio playback device: " + audio_device.info().status_message);
+        active_shell_ = nullptr;
+        return 1;
+    }
+
+    if (!audio_ready) {
+        crash_safe_log_.write(
+            foundation::LogLevel::Warning,
+            "Audio playback device unavailable; continuing without audio output: " +
+                audio_device.info().status_message);
+    }
+
     render::RenderSubsystem render_subsystem{
         dependencies_.application_config,
         crash_safe_log_,
@@ -79,6 +100,7 @@ int SmokeApplication::run() {
                       << render_subsystem.stats().view_count << " headless-fallback="
                       << render_subsystem.stats().using_headless_fallback;
         crash_safe_log_.write(foundation::LogLevel::Info, render_stream.str());
+        log_audio_device(audio_device.info());
     }
 
     std::unique_ptr<gameplay::IGameMode> mode;
@@ -107,6 +129,13 @@ int SmokeApplication::run() {
             std::string(mode->descriptor().id) + ")");
 
     resource_registry_.clear();
+    audio::AudioClipLibrary audio_clip_library;
+    if (!audio_clip_library.load(resource_registry_, crash_safe_log_)) {
+        crash_safe_log_.write(foundation::LogLevel::Error, "Failed to load authoring audio clips.");
+        active_shell_ = nullptr;
+        return 1;
+    }
+
     if (!render_subsystem.load_cooked_assets(resource_registry_)) {
         crash_safe_log_.write(foundation::LogLevel::Error, "Failed to load cooked render assets.");
         active_shell_ = nullptr;
@@ -121,7 +150,35 @@ int SmokeApplication::run() {
                      << " bytes=" << render_subsystem.stats().loaded_asset_bytes
                      << " source=" << render_subsystem.stats().cooked_asset_source;
         crash_safe_log_.write(foundation::LogLevel::Info, asset_stream.str());
+
+        const audio::AudioClipLibrarySummary& audio_summary = audio_clip_library.summary();
+        std::ostringstream audio_asset_stream;
+        audio_asset_stream << std::fixed << std::setprecision(2)
+                           << "  authoring audio: clips=" << audio_summary.clip_count
+                           << " frames=" << audio_summary.total_frames
+                           << " seconds=" << audio_summary.total_duration_seconds
+                           << " bytes=" << audio_summary.total_sample_bytes
+                           << " source="
+                           << (audio_summary.manifest_path.empty() ? std::string("<none>") : audio_summary.manifest_path.string());
+        crash_safe_log_.write(foundation::LogLevel::Info, audio_asset_stream.str());
     }
+
+    AuthoritativeAudioTransport transport;
+    if (audio_ready) {
+        if (const audio::AudioClipRecord* clip = audio_clip_library.first_clip(); clip != nullptr) {
+            if (!transport.bind_audio_clip(*clip, audio_device, crash_safe_log_)) {
+                crash_safe_log_.write(
+                    foundation::LogLevel::Warning,
+                    "Audio-authoritative transport could not bind the decoded clip; falling back to simulation transport.");
+            }
+        } else {
+            crash_safe_log_.write(
+                foundation::LogLevel::Warning,
+                "Audio-authoritative transport could not start because no decoded clips were available.");
+        }
+    }
+
+    active_transport_ = &transport;
 
     event_bus_.reset();
     world_model_.reset();
@@ -162,12 +219,14 @@ int SmokeApplication::run() {
         double simulation_ms = 0.0;
         while (platform_shell.frame_clock().should_run_fixed_step()) {
             const auto simulation_start = std::chrono::steady_clock::now();
-            transport_stub_.advance(platform_shell.frame_timing().fixed_step_seconds);
+            transport.tick(platform_shell.frame_timing().fixed_step_seconds);
             mode->on_fixed_step(*this, platform_shell.frame_timing().fixed_step_seconds);
             const auto simulation_end = std::chrono::steady_clock::now();
             simulation_ms += milliseconds_between(simulation_start, simulation_end);
             platform_shell.frame_clock().consume_fixed_step();
         }
+
+        transport.tick(0.0);
 
         if (telemetry_recorder_.size() == telemetry_count_before_frame) {
             telemetry_recorder_.record(foundation::TelemetrySnapshot{});
@@ -192,6 +251,9 @@ int SmokeApplication::run() {
             frame_snapshot->render_submission_ms = milliseconds_between(render_extract_start, render_extract_end);
             frame_snapshot->resident_memory_mib = platform::query_process_resident_memory_mib();
             frame_snapshot->draw_calls = render_subsystem.stats().draw_calls;
+            if (transport.using_audio_authority()) {
+                frame_snapshot->audio_drift_ms = 0.0;
+            }
         }
 
         if (dependencies_.application_config.main_loop.max_frame_count > 0 &&
@@ -203,6 +265,16 @@ int SmokeApplication::run() {
             platform_shell.sleep_until_next_fixed_step();
         }
     }
+
+    transport.tick(0.0);
+    const bool had_audio_authority = transport.using_audio_authority();
+    const gameplay::TransportSnapshot final_transport_snapshot = transport.snapshot();
+    const platform::AudioPlaybackProgress final_playback_progress = had_audio_authority
+        ? transport.playback_progress()
+        : platform::AudioPlaybackProgress{};
+    const TransportDrivenAudioSnapshot final_clip_snapshot = had_audio_authority
+        ? transport.clip_snapshot()
+        : TransportDrivenAudioSnapshot{};
 
     event_bus_.publish(
         "app.smoke",
@@ -237,7 +309,8 @@ int SmokeApplication::run() {
                         << " materials=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Material)]
                         << " shaders=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::ShaderProgram)]
                         << " meshes=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Mesh)]
-                        << " fonts=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)];
+                        << " fonts=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::Font)]
+                        << " audio=" << summary.counts_by_kind[foundation::to_index(foundation::ResourceKind::AudioClip)];
         crash_safe_log_.write(foundation::LogLevel::Info, resource_stream.str());
     }
 
@@ -260,6 +333,23 @@ int SmokeApplication::run() {
         }
         crash_safe_log_.write(foundation::LogLevel::Info, event_stream.str());
     }
+
+    if (had_audio_authority) {
+        std::ostringstream timing_stream;
+        timing_stream << std::fixed << std::setprecision(3)
+                      << "Audio authoritative transport: transport=" << final_transport_snapshot.position_seconds
+                      << "s stream=" << final_playback_progress.stream_consumed_seconds
+                      << "s raw-output=" << final_playback_progress.authoritative_position_seconds
+                      << "s mode=" << platform::to_string(final_playback_progress.authoritative_position_mode)
+                      << " queued=" << final_playback_progress.queued_input_seconds
+                      << "s latency=" << final_playback_progress.total_output_latency_seconds
+                      << "s clip=" << final_clip_snapshot.rendered_input_frames << '/' << final_clip_snapshot.total_frames
+                      << " drift-ms=0.000";
+        crash_safe_log_.write(foundation::LogLevel::Info, timing_stream.str());
+    }
+
+    transport.unbind_audio_clip();
+    active_transport_ = nullptr;
 
     world_model_.reset();
     resource_registry_.clear();
@@ -329,7 +419,8 @@ gameplay::WorldModel& SmokeApplication::world_model() noexcept {
 }
 
 gameplay::ITransportControl& SmokeApplication::transport() noexcept {
-    return transport_stub_;
+    assert(active_transport_ != nullptr);
+    return *active_transport_;
 }
 
 render::RenderExtractionContext& SmokeApplication::render_extraction() noexcept {
@@ -392,6 +483,18 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
         foundation::LogLevel::Info,
         "  fixed step: " + std::to_string(dependencies_.application_config.main_loop.fixed_step_seconds) + " s");
     {
+        std::ostringstream audio_stream;
+        audio_stream << "  audio request: enabled=" << dependencies_.application_config.audio.enable_playback_device
+                     << " required=" << dependencies_.application_config.audio.fail_if_unavailable
+                     << " rate=" << dependencies_.application_config.audio.preferred_sample_rate
+                     << "Hz channels=" << dependencies_.application_config.audio.preferred_channels
+                     << " frames=" << dependencies_.application_config.audio.preferred_buffer_frames
+                     << " format=" << platform::to_string(dependencies_.application_config.audio.preferred_format)
+                     << " start-paused=" << dependencies_.application_config.audio.start_paused
+                     << " gain=" << dependencies_.application_config.audio.device_gain;
+        crash_safe_log_.write(foundation::LogLevel::Info, audio_stream.str());
+    }
+    {
         std::ostringstream seed_stream;
         seed_stream << "  random seed: 0x" << std::hex << dependencies_.random_seed;
         crash_safe_log_.write(foundation::LogLevel::Info, seed_stream.str());
@@ -417,6 +520,29 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
             foundation::LogLevel::Info,
             "  startup mode: " + dependencies_.startup_mode_id);
     }
+}
+
+void SmokeApplication::log_audio_device(const platform::AudioDeviceInfo& info) {
+    if (!dependencies_.application_config.debug.enable_startup_diagnostics) {
+        return;
+    }
+
+    std::ostringstream stream;
+    stream << "  audio device: state=" << platform::to_string(info.state)
+           << " driver=" << info.driver_name
+           << " name=" << info.device_name
+           << " id=" << info.logical_device_id
+           << " paused=" << info.paused
+           << " requested=" << info.requested_spec.sample_rate_hz << "Hz/" << info.requested_spec.channels
+           << "ch/" << platform::to_string(info.requested_spec.format)
+           << " actual=" << info.actual_spec.sample_rate_hz << "Hz/" << info.actual_spec.channels
+           << "ch/" << platform::to_string(info.actual_spec.format)
+           << " frames=" << info.latency.device_buffer_frames
+           << " latency=" << info.latency.total_output_latency_ms << "ms"
+           << " latency-source=" << platform::to_string(info.latency.query_mode)
+           << " gain=" << info.gain
+           << " status=" << info.status_message;
+    crash_safe_log_.write(foundation::LogLevel::Info, stream.str());
 }
 
 void SmokeApplication::log_window_state() {

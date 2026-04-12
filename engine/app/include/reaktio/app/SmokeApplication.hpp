@@ -9,7 +9,6 @@
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ModeConfiguration.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
-#include "reaktio/gameplay/TransportStub.hpp"
 #include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/platform/FrameClock.hpp"
@@ -28,6 +27,7 @@ struct BuildInfo;
 } // namespace reaktio::foundation
 
 namespace reaktio::platform {
+struct AudioDeviceInfo;
 class SdlApplicationShell;
 } // namespace reaktio::platform
 
@@ -72,6 +72,7 @@ class SmokeApplication final : public gameplay::IModeHost {
 
   private:
     void log_startup(const foundation::BuildInfo& build_info);
+    void log_audio_device(const platform::AudioDeviceInfo& info);
     void log_window_state();
 
     SmokeApplicationDependencies dependencies_;
@@ -81,10 +82,10 @@ class SmokeApplication final : public gameplay::IModeHost {
     gameplay::EventBus event_bus_;
     gameplay::ReplayRecorder replay_recorder_;
     gameplay::WorldModel world_model_;
-    gameplay::TransportStub transport_stub_;
     render::RenderExtractionContext render_extraction_context_;
     foundation::CrashSafeLog crash_safe_log_;
     platform::SdlApplicationShell* active_shell_{};
+    gameplay::ITransportControl* active_transport_{};
 };
 
 } // namespace reaktio::app

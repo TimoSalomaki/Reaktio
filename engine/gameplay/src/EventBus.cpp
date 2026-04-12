@@ -56,7 +56,12 @@ std::string describe_event(const EventRecord& event) {
                 stream << "mode:" << payload.mode_id << ' ' << to_string(payload.phase);
             } else if constexpr (std::is_same_v<PayloadType, TransportEvent>) {
                 stream << "transport:" << payload.action << ' ' << to_string(payload.playback_state)
-                       << " @" << payload.position_seconds << " loop=" << payload.loop_enabled;
+                       << '/' << to_string(payload.playback_mode)
+                       << '/' << to_string(payload.position_authority)
+                       << " @" << payload.position_seconds << " loop=" << payload.loop_enabled
+                       << " preview=" << payload.preview_enabled
+                       << " rev=" << payload.timeline_revision
+                       << " jump=" << to_string(payload.discontinuity_reason);
             } else if constexpr (std::is_same_v<PayloadType, ReplayCheckpointEvent>) {
                 stream << "replay:" << payload.label << " step=" << payload.simulation_step
                        << " checkpoints=" << payload.checkpoint_count << " hash=0x" << std::hex

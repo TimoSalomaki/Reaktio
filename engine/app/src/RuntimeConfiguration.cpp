@@ -298,6 +298,19 @@ bool try_parse_window_mode(std::string_view value, platform::WindowMode& parsed)
     return true;
 }
 
+bool try_parse_audio_sample_format(std::string_view value, platform::AudioSampleFormat& parsed) noexcept {
+    const std::string lowered = lowercase_copy(value);
+    if (lowered == "f32") {
+        parsed = platform::AudioSampleFormat::F32;
+    } else if (lowered == "s16") {
+        parsed = platform::AudioSampleFormat::S16;
+    } else {
+        return false;
+    }
+
+    return true;
+}
+
 template <typename Value, typename ParseFunc>
 void load_typed_value(
     RuntimeConfigurationLoadResult& result,
@@ -540,6 +553,50 @@ RuntimeConfigurationLoadResult load_runtime_configuration() {
             "main_loop",
             values,
             {"fixed_step_seconds", "max_frame_delta_seconds", "max_fixed_steps_per_frame", "max_frame_count"});
+    });
+
+    process_known_section("audio", [&](const SectionValues& values) {
+        load_typed_value(result, sections, "audio", "enable_playback_device", "audio playback enabled flag", result.configuration.application_config.audio.enable_playback_device, try_parse_bool);
+        load_typed_value(result, sections, "audio", "fail_if_unavailable", "audio device required flag", result.configuration.application_config.audio.fail_if_unavailable, try_parse_bool);
+        load_typed_value(result, sections, "audio", "preferred_sample_rate", "audio sample rate", result.configuration.application_config.audio.preferred_sample_rate, [](std::string_view value, int& parsed) {
+            std::uint32_t converted = 0;
+            if (!try_parse_unsigned(value, converted) || converted > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            parsed = static_cast<int>(converted);
+            return parsed > 0;
+        });
+        load_typed_value(result, sections, "audio", "preferred_channels", "audio channel count", result.configuration.application_config.audio.preferred_channels, [](std::string_view value, int& parsed) {
+            std::uint32_t converted = 0;
+            if (!try_parse_unsigned(value, converted) || converted > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            parsed = static_cast<int>(converted);
+            return parsed > 0;
+        });
+        load_typed_value(result, sections, "audio", "preferred_buffer_frames", "audio buffer frames", result.configuration.application_config.audio.preferred_buffer_frames, [](std::string_view value, int& parsed) {
+            std::uint32_t converted = 0;
+            if (!try_parse_unsigned(value, converted) || converted > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            parsed = static_cast<int>(converted);
+            return parsed > 0;
+        });
+        load_typed_value(result, sections, "audio", "preferred_format", "audio sample format", result.configuration.application_config.audio.preferred_format, try_parse_audio_sample_format);
+        load_typed_value(result, sections, "audio", "start_paused", "audio start-paused flag", result.configuration.application_config.audio.start_paused, try_parse_bool);
+        load_typed_value(result, sections, "audio", "device_gain", "audio device gain", result.configuration.application_config.audio.device_gain, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        warn_unknown_keys(
+            result,
+            "audio",
+            values,
+            {"enable_playback_device", "fail_if_unavailable", "preferred_sample_rate", "preferred_channels", "preferred_buffer_frames", "preferred_format", "start_paused", "device_gain"});
     });
 
     process_known_section("renderer", [&](const SectionValues& values) {

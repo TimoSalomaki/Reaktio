@@ -26,8 +26,13 @@ struct ModeLifecycleEvent {
 struct TransportEvent {
     std::string action;
     TransportPlaybackState playback_state{TransportPlaybackState::Stopped};
+    TransportPlaybackMode playback_mode{TransportPlaybackMode::Normal};
+    TransportPositionAuthority position_authority{TransportPositionAuthority::Simulation};
     double position_seconds{};
     bool loop_enabled{};
+    bool preview_enabled{};
+    std::uint64_t timeline_revision{};
+    TransportDiscontinuityReason discontinuity_reason{TransportDiscontinuityReason::None};
 };
 
 struct ReplayCheckpointEvent {

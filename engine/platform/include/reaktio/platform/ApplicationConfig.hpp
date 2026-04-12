@@ -24,6 +24,12 @@ enum class WindowMode {
     Fullscreen,
 };
 
+enum class AudioSampleFormat {
+    Unknown,
+    S16,
+    F32,
+};
+
 struct WindowConfig {
     std::string title{"Reaktio"};
     int width{1280};
@@ -42,6 +48,17 @@ struct MainLoopConfig {
     std::uint64_t max_frame_count{4};
 };
 
+struct AudioConfig {
+    bool enable_playback_device{true};
+    bool fail_if_unavailable{false};
+    int preferred_sample_rate{48000};
+    int preferred_channels{2};
+    int preferred_buffer_frames{1024};
+    AudioSampleFormat preferred_format{AudioSampleFormat::F32};
+    bool start_paused{true};
+    float device_gain{1.0f};
+};
+
 struct DebugOptions {
     bool enable_startup_diagnostics{true};
     bool enable_debug_overlay{true};
@@ -52,6 +69,7 @@ struct DebugOptions {
 struct ApplicationConfig {
     WindowConfig window;
     MainLoopConfig main_loop;
+    AudioConfig audio;
     RendererBackendPreference renderer_backend{RendererBackendPreference::Automatic};
     bool vsync_enabled{true};
     DebugOptions debug;
@@ -97,6 +115,19 @@ struct ApplicationConfig {
     return "unknown";
 }
 
+[[nodiscard]] inline constexpr std::string_view to_string(AudioSampleFormat format) noexcept {
+    switch (format) {
+    case AudioSampleFormat::Unknown:
+        return "unknown";
+    case AudioSampleFormat::S16:
+        return "s16";
+    case AudioSampleFormat::F32:
+        return "f32";
+    }
+
+    return "unknown";
+}
+
 [[nodiscard]] inline ApplicationConfig make_smoke_application_config() {
     ApplicationConfig config{};
     config.window.title = "Reaktio Platform Smoke";
@@ -106,6 +137,14 @@ struct ApplicationConfig {
     config.window.start_hidden = true;
     config.window.enable_text_input = true;
     config.main_loop.max_frame_count = 16;
+    config.audio.enable_playback_device = true;
+    config.audio.fail_if_unavailable = false;
+    config.audio.preferred_sample_rate = 48000;
+    config.audio.preferred_channels = 2;
+    config.audio.preferred_buffer_frames = 1024;
+    config.audio.preferred_format = AudioSampleFormat::F32;
+    config.audio.start_paused = true;
+    config.audio.device_gain = 1.0f;
     config.renderer_backend = RendererBackendPreference::Noop;
     config.vsync_enabled = false;
     config.debug.enable_debug_overlay = false;

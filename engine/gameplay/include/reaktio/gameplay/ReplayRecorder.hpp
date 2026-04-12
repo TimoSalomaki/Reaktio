@@ -42,7 +42,10 @@ struct ReplayCheckpoint {
     std::uint64_t frame_index{};
     std::uint64_t simulation_step{};
     TransportPlaybackState transport_state{TransportPlaybackState::Stopped};
+  TransportPositionAuthority transport_position_authority{TransportPositionAuthority::Simulation};
     double transport_position_seconds{};
+  std::uint64_t transport_timeline_revision{};
+  TransportDiscontinuityReason transport_discontinuity_reason{TransportDiscontinuityReason::None};
     std::uint64_t root_random_seed{};
     std::uint64_t authoritative_state_hash{};
     std::string label;

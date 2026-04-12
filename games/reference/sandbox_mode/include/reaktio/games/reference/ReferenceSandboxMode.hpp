@@ -4,6 +4,7 @@
 #include "reaktio/gameplay/IGameMode.hpp"
 #include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
+#include "reaktio/rhythm/TempoMap.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +50,10 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::uint64_t collision_signature_{};
     std::uint64_t collision_topology_{};
     std::uint64_t last_published_collision_topology_{static_cast<std::uint64_t>(-1)};
+    std::uint64_t last_published_transport_revision_{};
+    rhythm::TempoMap rhythm_tempo_map_{};
+    rhythm::RhythmPosition rhythm_position_{};
+    std::string rhythm_status_{"tempo-map=uninitialized"};
     gameplay::MotionIntegrationReport motion_report_{};
     gameplay::CollisionDetectionReport collision_report_{};
     gameplay::TransformPropagationReport propagation_report_{};

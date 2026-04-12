@@ -65,6 +65,28 @@ target_compile_definitions(reaktio_foundation
 )
 reaktio_configure_target(reaktio_foundation)
 
+add_library(reaktio_rhythm STATIC
+    engine/rhythm/src/TempoMap.cpp
+)
+add_library(Reaktio::rhythm ALIAS reaktio_rhythm)
+target_include_directories(reaktio_rhythm
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/rhythm/include"
+)
+target_link_libraries(reaktio_rhythm PUBLIC Reaktio::foundation)
+reaktio_configure_target(reaktio_rhythm)
+
+add_library(reaktio_audio STATIC
+    engine/audio/src/AudioClipLibrary.cpp
+)
+add_library(Reaktio::audio ALIAS reaktio_audio)
+target_include_directories(reaktio_audio
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/audio/include"
+)
+target_link_libraries(reaktio_audio PUBLIC Reaktio::foundation SDL3::SDL3)
+reaktio_configure_target(reaktio_audio)
+
 add_library(reaktio_gameplay STATIC
     engine/gameplay/src/DebugVisualizations.cpp
     engine/gameplay/src/EventBus.cpp
@@ -73,7 +95,7 @@ add_library(reaktio_gameplay STATIC
     engine/gameplay/src/MotionCollision.cpp
     engine/gameplay/src/ReplayRecorder.cpp
     engine/gameplay/src/Transforms.cpp
-    engine/gameplay/src/TransportStub.cpp
+    engine/gameplay/src/TransportController.cpp
     engine/gameplay/src/WorldModel.cpp
 )
 add_library(Reaktio::gameplay ALIAS reaktio_gameplay)
@@ -87,6 +109,7 @@ reaktio_configure_target(reaktio_gameplay)
 add_library(reaktio_platform STATIC
     engine/platform/src/FrameClock.cpp
     engine/platform/src/InputSnapshot.cpp
+    engine/platform/src/SdlAudioDevice.cpp
     engine/platform/src/SdlApplicationShell.cpp
     engine/platform/src/StackProbe.cpp
 )
@@ -145,13 +168,16 @@ target_link_libraries(
         Reaktio::foundation
         Reaktio::gameplay
         Reaktio::platform_api
+        Reaktio::rhythm
         Reaktio::render_api
 )
 reaktio_configure_target(reaktio_reference_sandbox_mode)
 
 add_library(reaktio_app STATIC
+    engine/app/src/AuthoritativeAudioTransport.cpp
     engine/app/src/RuntimeConfiguration.cpp
     engine/app/src/SmokeApplication.cpp
+    engine/app/src/TransportDrivenAudioSource.cpp
 )
 add_library(Reaktio::app ALIAS reaktio_app)
 target_include_directories(reaktio_app
@@ -160,6 +186,7 @@ target_include_directories(reaktio_app
 )
 target_link_libraries(reaktio_app
     PUBLIC
+        Reaktio::audio
         Reaktio::foundation
         Reaktio::gameplay
         Reaktio::platform

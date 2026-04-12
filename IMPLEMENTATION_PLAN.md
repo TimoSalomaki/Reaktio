@@ -210,14 +210,14 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 5 - Audio, Transport, and Rhythm Core
 
-- [ ] Implement the SDL-based audio device layer and formalize how device latency is queried and reported.
-- [ ] Create audio clip loading and decoding paths for authoring-friendly source formats.
-- [ ] Implement the transport controller with play, pause, stop, seek, restart, preview, and loop regions.
-- [ ] Make the audio transport the authoritative song-position source for gameplay timing.
-- [ ] Prototype and lock down how authoritative song position is measured against the real audio path before finalizing judgement logic.
-- [ ] Implement a tempo map that supports BPM changes, time signatures, stops, and optional warps.
-- [ ] Implement conversions between samples, seconds, beats, bars, and chart ticks using 64-bit integer math where authoritative.
-- [ ] Define seek, restart, and loop semantics so transport state changes never create hidden score-affecting discontinuities.
+- [x] Implement the SDL-based audio device layer and formalize how device latency is queried and reported.
+- [x] Create audio clip loading and decoding paths for authoring-friendly source formats.
+- [x] Implement the transport controller with play, pause, stop, seek, restart, preview, and loop regions.
+- [x] Make the audio transport the authoritative song-position source for gameplay timing.
+- [x] Prototype and lock down how authoritative song position is measured against the real audio path before finalizing judgement logic.
+- [x] Implement a tempo map that supports BPM changes, time signatures, stops, and optional warps.
+- [x] Implement conversions between samples, seconds, beats, bars, and chart ticks using 64-bit integer math where authoritative.
+- [x] Define seek, restart, and loop semantics so transport state changes never create hidden score-affecting discontinuities.
 - [ ] Implement note scroll or travel models that are independent from cue identity.
 - [ ] Add latency calibration flows for audio output and input response.
 - [ ] Add drift detection and correction between simulation time and audio time.

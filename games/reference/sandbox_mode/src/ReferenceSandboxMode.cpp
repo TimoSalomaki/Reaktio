@@ -16,6 +16,7 @@
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
+#include "reaktio/rhythm/TempoMap.hpp"
 
 #include <array>
 #include <cmath>
@@ -34,11 +35,72 @@ constexpr std::array<float, 3> k_lane_velocity_x{72.0f, -48.0f, 60.0f};
 const gameplay::ModeDescriptor k_descriptor{
     .id = "mode.reference.sandbox",
     .display_name = "Reference Sandbox",
-    .description = "Reference mode that exercises lifecycle, input, transport stubs, and render extraction.",
+    .description = "Reference mode that exercises lifecycle, input, transport control, and render extraction.",
 };
 
-std::uint32_t state_color(gameplay::TransportPlaybackState playback_state) noexcept {
-    switch (playback_state) {
+rhythm::TempoMapDefinition make_demo_tempo_map_definition() {
+    return rhythm::TempoMapDefinition{
+        .config = rhythm::TempoMapConfig{
+            .ticks_per_quarter_note = 480,
+            .sample_rate_hz = 48000,
+        },
+        .tempo_changes = {
+            rhythm::TempoChange{
+                .start_tick = 0,
+                .microseconds_per_quarter_note = rhythm::microseconds_per_quarter_from_milli_bpm(120000),
+            },
+            rhythm::TempoChange{
+                .start_tick = 1920,
+                .microseconds_per_quarter_note = rhythm::microseconds_per_quarter_from_milli_bpm(150000),
+            },
+        },
+        .time_signature_changes = {
+            rhythm::TimeSignatureChange{
+                .start_tick = 0,
+                .numerator = 4,
+                .denominator = 4,
+            },
+            rhythm::TimeSignatureChange{
+                .start_tick = 3840,
+                .numerator = 7,
+                .denominator = 8,
+            },
+        },
+        .stops = {
+            rhythm::StopSegment{
+                .start_tick = 1440,
+                .duration_microseconds = 120000,
+            },
+        },
+        .warps = {
+            rhythm::WarpSegment{
+                .start_tick = 4560,
+                .duration_ticks = 480,
+            },
+        },
+    };
+}
+
+std::string make_rhythm_status(const rhythm::TempoMap& tempo_map) {
+    if (!tempo_map.valid()) {
+        return std::string("tempo-map=invalid ") + std::string(tempo_map.last_error());
+    }
+
+    const rhythm::RhythmPosition warp_position = tempo_map.position_from_tick(5040);
+    const rhythm::RhythmPosition second_position = tempo_map.position_from_seconds(1.0);
+    std::ostringstream stream;
+    stream << "tempo-map=ok tick@1s=" << second_position.tick << " bar@warp=" << warp_position.bar.bar_index
+           << ':' << warp_position.bar.beat_index_in_bar << '+' << warp_position.bar.tick_offset_in_beat;
+    return stream.str();
+}
+
+std::uint32_t state_color(const gameplay::TransportSnapshot& transport_snapshot) noexcept {
+    if (transport_snapshot.playback_mode == gameplay::TransportPlaybackMode::Preview &&
+        transport_snapshot.playback_state != gameplay::TransportPlaybackState::Stopped) {
+        return 0x1f3b66ff;
+    }
+
+    switch (transport_snapshot.playback_state) {
     case gameplay::TransportPlaybackState::Playing:
         return 0x1f4d2cff;
     case gameplay::TransportPlaybackState::Paused:
@@ -50,8 +112,8 @@ std::uint32_t state_color(gameplay::TransportPlaybackState playback_state) noexc
     return 0x16324cff;
 }
 
-std::uint32_t mix_visual_color(gameplay::TransportPlaybackState playback_state, std::uint32_t visual_roll) noexcept {
-    const std::uint32_t base = state_color(playback_state);
+std::uint32_t mix_visual_color(const gameplay::TransportSnapshot& transport_snapshot, std::uint32_t visual_roll) noexcept {
+    const std::uint32_t base = state_color(transport_snapshot);
     const std::uint32_t red = (base >> 24u) & 0xffu;
     const std::uint32_t green = (base >> 16u) & 0xffu;
     const std::uint32_t blue = 0x20u + (visual_roll % 0xa0u);
@@ -72,7 +134,39 @@ std::uint64_t make_state_hash(
     hash *= 1099511628211ull;
     hash ^= static_cast<std::uint64_t>(transport_snapshot.playback_state);
     hash *= 1099511628211ull;
-    hash ^= static_cast<std::uint64_t>(transport_snapshot.position_seconds * 1000000.0);
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.playback_mode);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.position_authority);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.position_seconds * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.playback_rate * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.loop_region.enabled);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.loop_region.start_seconds * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.loop_region.end_seconds * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.preview_region.enabled);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.preview_region.start_seconds * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.preview_region.end_seconds * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= transport_snapshot.completed_loops;
+    hash *= 1099511628211ull;
+    hash ^= transport_snapshot.completed_previews;
+    hash *= 1099511628211ull;
+    hash ^= transport_snapshot.discontinuity.timeline_revision;
+    hash *= 1099511628211ull;
+    hash ^= transport_snapshot.discontinuity.discontinuity_count;
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(transport_snapshot.discontinuity.last_reason);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.discontinuity.last_from_seconds * 1000000.0));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(std::llround(transport_snapshot.discontinuity.last_to_seconds * 1000000.0));
     hash *= 1099511628211ull;
     hash ^= transport_roll;
     hash *= 1099511628211ull;
@@ -234,9 +328,40 @@ void publish_transport_event(
         gameplay::TransportEvent{
             .action = std::string(action),
             .playback_state = transport_snapshot.playback_state,
+            .playback_mode = transport_snapshot.playback_mode,
+            .position_authority = transport_snapshot.position_authority,
             .position_seconds = transport_snapshot.position_seconds,
             .loop_enabled = transport_snapshot.loop_region.enabled,
+            .preview_enabled = transport_snapshot.preview_region.enabled,
+            .timeline_revision = transport_snapshot.discontinuity.timeline_revision,
+            .discontinuity_reason = transport_snapshot.discontinuity.last_reason,
         });
+}
+
+void publish_transport_discontinuity_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    const gameplay::TransportSnapshot& transport_snapshot,
+    std::uint64_t& last_published_transport_revision) {
+    if (transport_snapshot.discontinuity.timeline_revision == 0u ||
+        transport_snapshot.discontinuity.timeline_revision == last_published_transport_revision) {
+        return;
+    }
+
+    std::ostringstream stream;
+    stream << "transport rev=" << transport_snapshot.discontinuity.timeline_revision
+           << " count=" << transport_snapshot.discontinuity.discontinuity_count
+           << " reason=" << gameplay::to_string(transport_snapshot.discontinuity.last_reason)
+           << " from=" << transport_snapshot.discontinuity.last_from_seconds
+           << " to=" << transport_snapshot.discontinuity.last_to_seconds;
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = stream.str(),
+        });
+    last_published_transport_revision = transport_snapshot.discontinuity.timeline_revision;
 }
 
 void publish_replay_checkpoint_event(
@@ -668,6 +793,7 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     collision_signature_ = 0;
     collision_topology_ = 0;
     last_published_collision_topology_ = static_cast<std::uint64_t>(-1);
+    last_published_transport_revision_ = 0;
     motion_report_ = {};
     collision_report_ = {};
     propagation_report_ = {};
@@ -686,6 +812,10 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         host.input_bindings(),
         "transport_restart",
         configured_transport_restart_binding_);
+
+    rhythm_tempo_map_.clear();
+    (void)rhythm_tempo_map_.rebuild(make_demo_tempo_map_definition());
+    rhythm_status_ = make_rhythm_status(rhythm_tempo_map_);
 
     seed_resources(
         host.resource_registry(),
@@ -745,6 +875,7 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
 
     host.random_service().reset_streams();
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    rhythm_position_ = rhythm_tempo_map_.position_from_seconds(transport_snapshot.position_seconds);
     const std::uint64_t checkpoint_hash = make_state_hash(
         fixed_steps_,
         transport_snapshot,
@@ -758,7 +889,10 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
         .transport_state = transport_snapshot.playback_state,
+        .transport_position_authority = transport_snapshot.position_authority,
         .transport_position_seconds = transport_snapshot.position_seconds,
+        .transport_timeline_revision = transport_snapshot.discontinuity.timeline_revision,
+        .transport_discontinuity_reason = transport_snapshot.discontinuity.last_reason,
         .root_random_seed = host.random_service().root_seed(),
         .authoritative_state_hash = checkpoint_hash,
         .label = "enter",
@@ -771,7 +905,7 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         host.frame_timing().frame_index,
         fixed_steps_,
         gameplay::DiagnosticEvent{
-            .message = "world seeded entities=" + std::to_string(world_entity_count_),
+            .message = "world seeded entities=" + std::to_string(world_entity_count_) + " " + rhythm_status_,
         });
 }
 
@@ -788,21 +922,24 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
     gameplay::ITransportControl& transport = host.transport();
     std::string_view action = "tick";
     if (fixed_steps_ == 2) {
+        transport.preview(0.20, 0.22);
+        action = "preview";
+    } else if (fixed_steps_ == 3) {
         transport.pause();
         action = "pause";
-    } else if (fixed_steps_ == 3) {
-        transport.seek(0.50);
-        action = "seek";
     } else if (fixed_steps_ == 4) {
         transport.play();
         action = "play";
-    } else if (fixed_steps_ == 5) {
+    } else if (fixed_steps_ == 8) {
         transport.clear_loop_region();
         action = "clear-loop";
-    } else if (fixed_steps_ == 6) {
+    } else if (fixed_steps_ == 9) {
         transport.set_loop_region(1.0, 1.4);
         action = "set-loop";
-    } else if (fixed_steps_ == 7) {
+    } else if (fixed_steps_ == 10) {
+        transport.seek(1.10);
+        action = "seek";
+    } else if (fixed_steps_ == 11) {
         transport.restart();
         action = "restart";
     }
@@ -811,6 +948,7 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
     motion_report_ = gameplay::integrate_motion(host.world_model(), fixed_delta_seconds);
 
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    rhythm_position_ = rhythm_tempo_map_.position_from_seconds(transport_snapshot.position_seconds);
     propagate_and_refresh(
         propagation_report_,
         collision_report_,
@@ -824,6 +962,11 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
         motion_report_,
         fixed_steps_,
         host);
+    publish_transport_discontinuity_diagnostic(
+        host,
+        fixed_steps_,
+        transport_snapshot,
+        last_published_transport_revision_);
 
     const std::uint64_t checkpoint_hash = make_state_hash(
         fixed_steps_,
@@ -838,7 +981,10 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
         .transport_state = transport_snapshot.playback_state,
+        .transport_position_authority = transport_snapshot.position_authority,
         .transport_position_seconds = transport_snapshot.position_seconds,
+        .transport_timeline_revision = transport_snapshot.discontinuity.timeline_revision,
+        .transport_discontinuity_reason = transport_snapshot.discontinuity.last_reason,
         .root_random_seed = host.random_service().root_seed(),
         .authoritative_state_hash = checkpoint_hash,
         .label = "fixed-step",
@@ -856,6 +1002,7 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
 
 void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) {
     const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
+    rhythm_position_ = rhythm_tempo_map_.position_from_seconds(transport_snapshot.position_seconds);
     const platform::InputSnapshot& input_snapshot = host.input_snapshot();
     const foundation::DeterministicRandomService& random_service = host.random_service();
     const foundation::DeterministicRng* transport_rng = random_service.find_stream("reference-sandbox.transport");
@@ -874,11 +1021,14 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
             .near_plane = 0.0f,
             .far_plane = 100.0f,
         });
-    host.render_extraction().set_main_scene_clear(mix_visual_color(transport_snapshot.playback_state, visual_roll_));
+    host.render_extraction().set_main_scene_clear(mix_visual_color(transport_snapshot, visual_roll_));
 
     std::ostringstream state_stream;
-    state_stream << "transport=" << gameplay::to_string(transport_snapshot.playback_state) << " pos="
-                 << transport_snapshot.position_seconds << '/' << transport_snapshot.duration_seconds << "s alpha="
+    state_stream << "transport=" << gameplay::to_string(transport_snapshot.playback_state) << '/'
+                 << gameplay::to_string(transport_snapshot.playback_mode) << '/'
+                 << gameplay::to_string(transport_snapshot.position_authority) << " pos="
+                 << transport_snapshot.position_seconds << '/' << transport_snapshot.duration_seconds << "s rev="
+                 << transport_snapshot.discontinuity.timeline_revision << " alpha="
                  << interpolation_alpha;
     host.render_extraction().add_debug_text(0, 8, 0x0f, state_stream.str());
 
@@ -886,16 +1036,35 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     loop_stream << "loop=" << transport_snapshot.loop_region.enabled << " ["
                 << transport_snapshot.loop_region.start_seconds << ", "
                 << transport_snapshot.loop_region.end_seconds << "] loops="
-                << transport_snapshot.completed_loops << " fixed-steps="
+                << transport_snapshot.completed_loops << " preview="
+                << transport_snapshot.preview_region.enabled << " ["
+                << transport_snapshot.preview_region.start_seconds << ", "
+                << transport_snapshot.preview_region.end_seconds << "] previews="
+                << transport_snapshot.completed_previews << " jump="
+                << gameplay::to_string(transport_snapshot.discontinuity.last_reason) << '('
+                << transport_snapshot.discontinuity.last_from_seconds << "->"
+                << transport_snapshot.discontinuity.last_to_seconds << ") fixed-steps="
                 << transport_snapshot.advanced_fixed_steps;
     host.render_extraction().add_debug_text(0, 9, 0x0e, loop_stream.str());
+
+    std::ostringstream rhythm_stream;
+    if (rhythm_tempo_map_.valid()) {
+        rhythm_stream << "rhythm tick=" << rhythm_position_.tick << " beat=" << rhythm_position_.beat.whole_beats
+                      << '+' << rhythm_position_.beat.tick_offset_in_beat << " bar="
+                      << rhythm_position_.bar.bar_index << ':' << rhythm_position_.bar.beat_index_in_bar
+                      << '+' << rhythm_position_.bar.tick_offset_in_beat << " sample="
+                      << rhythm_position_.sample_index;
+    } else {
+        rhythm_stream << rhythm_status_;
+    }
+    host.render_extraction().add_debug_text(0, 10, 0x0d, rhythm_stream.str());
 
     std::ostringstream input_stream;
     input_stream << "keys=" << input_snapshot.keyboard_events().size() << " mouse="
                  << input_snapshot.mouse_button_events().size() << " text="
                  << input_snapshot.text_input_events().size() << " gamepads="
                  << input_snapshot.connected_gamepads().size();
-    host.render_extraction().add_debug_text(0, 10, 0x0a, input_stream.str());
+    host.render_extraction().add_debug_text(0, 11, 0x0a, input_stream.str());
 
     std::ostringstream rng_stream;
     rng_stream << "rng root=0x" << std::hex << random_service.root_seed() << std::dec
@@ -903,24 +1072,24 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                << transport_roll_ << " visual-roll=" << visual_roll_ << " draws="
                << (transport_rng != nullptr ? transport_rng->generated_values() : 0) << '/'
                << (visual_rng != nullptr ? visual_rng->generated_values() : 0);
-    host.render_extraction().add_debug_text(0, 11, 0x0d, rng_stream.str());
+    host.render_extraction().add_debug_text(0, 12, 0x0d, rng_stream.str());
 
     std::ostringstream replay_stream;
     replay_stream << "replay inputs=" << replay_recorder.input_frame_count() << " checkpoints="
                   << replay_recorder.checkpoint_count() << " last="
                   << (last_checkpoint != nullptr ? last_checkpoint->label : std::string_view("none"));
-    host.render_extraction().add_debug_text(0, 12, 0x0c, replay_stream.str());
+    host.render_extraction().add_debug_text(0, 13, 0x0c, replay_stream.str());
 
     std::ostringstream event_stream;
     event_stream << "events=" << event_bus.published_count() << '/' << event_bus.count() << " last="
                  << (last_event != nullptr ? gameplay::describe_event(*last_event) : std::string("none"));
-    host.render_extraction().add_debug_text(0, 13, 0x0b, event_stream.str());
+    host.render_extraction().add_debug_text(0, 14, 0x0b, event_stream.str());
 
     std::ostringstream world_stream;
     world_stream << "world entities=" << world_entity_count_ << " phase=" << average_phase_
                  << " sample=" << sample_first_label(host.world_model()) << " x=" << sample_cue_world_x_
                  << " tip-z=" << sample_tip_world_.z;
-    host.render_extraction().add_debug_text(0, 14, 0x0f, world_stream.str());
+    host.render_extraction().add_debug_text(0, 15, 0x0f, world_stream.str());
 
     std::ostringstream transform_stream;
     transform_stream << "propagate 2d=" << propagation_report_.propagated_2d << " 3d="
@@ -928,7 +1097,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                      << (propagation_report_.detached_2d + propagation_report_.detached_3d) << " stale="
                      << (propagation_report_.stale_world_transforms_2d + propagation_report_.stale_world_transforms_3d)
                      << " cycles=" << (propagation_report_.cycle_breaks_2d + propagation_report_.cycle_breaks_3d);
-    host.render_extraction().add_debug_text(0, 15, 0x0e, transform_stream.str());
+    host.render_extraction().add_debug_text(0, 16, 0x0e, transform_stream.str());
 
     std::ostringstream motion_stream;
     motion_stream << "motion l2=" << motion_report_.linear_2d << " a2=" << motion_report_.angular_2d
@@ -938,7 +1107,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         motion_stream << " first=" << gameplay::to_string(collision_report_.contacts.front().shape_pair)
                       << " pen=" << collision_report_.contacts.front().penetration;
     }
-    host.render_extraction().add_debug_text(0, 16, 0x0d, motion_stream.str());
+    host.render_extraction().add_debug_text(0, 17, 0x0d, motion_stream.str());
 
     std::ostringstream resource_stream;
     resource_stream << "resources count=" << resource_summary_.resource_count << " rev=" << resource_summary_.revision
@@ -957,19 +1126,19 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                     << " mesh-h=" << rig_mesh_handle_.value() << '/' << rig_mesh_runtime_label_
                     << " debug=" << debug_font_handle_.value() << '/' << debug_font_runtime_label_
                     << " stale=" << stale_debug_font_borrow_valid_;
-    host.render_extraction().add_debug_text(0, 17, 0x0c, resource_stream.str());
+    host.render_extraction().add_debug_text(0, 18, 0x0c, resource_stream.str());
 
     std::ostringstream config_stream;
     config_stream << "cfg speed=" << configured_velocity_scale_ << " hit=" << configured_hit_window_half_width_
                   << 'x' << configured_hit_window_half_height_ << " cue-id="
                   << configured_cue_material_authoring_id_ << " font-id="
                   << configured_debug_font_authoring_id_;
-    host.render_extraction().add_debug_text(0, 18, 0x0b, config_stream.str());
+    host.render_extraction().add_debug_text(0, 19, 0x0b, config_stream.str());
 
     std::ostringstream binding_stream;
     binding_stream << "bindings pause=" << configured_transport_pause_binding_
                    << " restart=" << configured_transport_restart_binding_;
-    host.render_extraction().add_debug_text(0, 19, 0x0a, binding_stream.str());
+    host.render_extraction().add_debug_text(0, 20, 0x0a, binding_stream.str());
 
     // Exercise the new render paths: sprites for cue positions, debug shapes for hit windows,
     // and lines for lane baselines.
@@ -1104,6 +1273,11 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
 void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
     host.transport().stop();
     const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
+    publish_transport_discontinuity_diagnostic(
+        host,
+        fixed_steps_,
+        transport_snapshot,
+        last_published_transport_revision_);
     const std::uint64_t checkpoint_hash = make_state_hash(
         fixed_steps_,
         transport_snapshot,
@@ -1117,7 +1291,10 @@ void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
         .transport_state = transport_snapshot.playback_state,
+        .transport_position_authority = transport_snapshot.position_authority,
         .transport_position_seconds = transport_snapshot.position_seconds,
+        .transport_timeline_revision = transport_snapshot.discontinuity.timeline_revision,
+        .transport_discontinuity_reason = transport_snapshot.discontinuity.last_reason,
         .root_random_seed = host.random_service().root_seed(),
         .authoritative_state_hash = checkpoint_hash,
         .label = "exit",
