@@ -1,5 +1,6 @@
 #pragma once
 
+#include "reaktio/app/TransportAlignmentTracker.hpp"
 #include "reaktio/app/TransportDrivenAudioSource.hpp"
 #include "reaktio/audio/AudioClipLibrary.hpp"
 #include "reaktio/gameplay/TransportController.hpp"
@@ -28,6 +29,7 @@ class AuthoritativeAudioTransport final : public gameplay::ITransportControl {
     [[nodiscard]] TransportDrivenAudioSnapshot clip_snapshot() const noexcept;
 
     [[nodiscard]] const gameplay::TransportSnapshot& snapshot() const noexcept override;
+    [[nodiscard]] const gameplay::TransportDiagnostics& diagnostics() const noexcept override;
     void play() noexcept override;
     void pause() noexcept override;
     void stop() noexcept override;
@@ -38,11 +40,13 @@ class AuthoritativeAudioTransport final : public gameplay::ITransportControl {
     void clear_loop_region() noexcept override;
 
   private:
+    void refresh_alignment_diagnostics(double simulation_delta_seconds) noexcept;
     void sync_from_audio(bool use_device_position) noexcept;
     void update_device_stream_origin() noexcept;
     void pause_or_resume_device_for_current_state() noexcept;
 
     gameplay::TransportController transport_;
+    TransportAlignmentTracker alignment_tracker_;
     TransportDrivenAudioSource clip_source_;
     platform::SdlAudioDevice* bound_device_{};
     bool using_audio_authority_{};

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -33,6 +35,13 @@ enum class TransportDiscontinuityReason {
     DurationClamp,
 };
 
+enum class TransportCorrectionType {
+    None,
+    SoftNudge,
+    HardSnap,
+    DiscontinuitySnap,
+};
+
 struct TransportLoopRegion {
     double start_seconds{};
     double end_seconds{};
@@ -53,6 +62,22 @@ struct TransportDiscontinuityState {
     double last_to_seconds{};
 };
 
+struct TransportCorrectionPolicy {
+    double soft_correction_threshold_seconds{0.006};
+    double hard_snap_threshold_seconds{0.030};
+    double max_soft_correction_step_seconds{0.0025};
+};
+
+struct TransportCorrectionEvent {
+    std::uint64_t sequence{};
+    TransportCorrectionType correction_type{TransportCorrectionType::None};
+    double authoritative_position_seconds{};
+    double simulation_position_before_seconds{};
+    double simulation_position_after_seconds{};
+    double drift_before_seconds{};
+    double correction_applied_seconds{};
+};
+
 struct TransportSnapshot {
     TransportPlaybackState playback_state{TransportPlaybackState::Stopped};
     TransportPlaybackMode playback_mode{TransportPlaybackMode::Normal};
@@ -68,11 +93,28 @@ struct TransportSnapshot {
     TransportDiscontinuityState discontinuity{};
 };
 
+struct TransportDiagnostics {
+    bool using_audio_authority{};
+    double authoritative_position_seconds{};
+    double simulation_position_seconds{};
+    double drift_seconds{};
+    double stream_consumed_seconds{};
+    double reported_output_position_seconds{};
+    double queued_input_seconds{};
+    double device_latency_seconds{};
+    double total_output_latency_seconds{};
+    TransportCorrectionPolicy correction_policy{};
+    std::uint64_t correction_count{};
+    std::array<TransportCorrectionEvent, 4> recent_corrections{};
+    std::size_t recent_correction_count{};
+};
+
 class ITransportControl {
   public:
     virtual ~ITransportControl() = default;
 
     [[nodiscard]] virtual const TransportSnapshot& snapshot() const noexcept = 0;
+        [[nodiscard]] virtual const TransportDiagnostics& diagnostics() const noexcept = 0;
     virtual void play() noexcept = 0;
     virtual void pause() noexcept = 0;
     virtual void stop() noexcept = 0;
@@ -138,6 +180,21 @@ class ITransportControl {
         return "loop-region-clamp";
     case TransportDiscontinuityReason::DurationClamp:
         return "duration-clamp";
+    }
+
+    return "unknown";
+}
+
+[[nodiscard]] inline constexpr std::string_view to_string(TransportCorrectionType correction_type) noexcept {
+    switch (correction_type) {
+    case TransportCorrectionType::None:
+        return "none";
+    case TransportCorrectionType::SoftNudge:
+        return "soft-nudge";
+    case TransportCorrectionType::HardSnap:
+        return "hard-snap";
+    case TransportCorrectionType::DiscontinuitySnap:
+        return "discontinuity-snap";
     }
 
     return "unknown";

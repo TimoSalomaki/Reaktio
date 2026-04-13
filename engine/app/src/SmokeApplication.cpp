@@ -251,9 +251,7 @@ int SmokeApplication::run() {
             frame_snapshot->render_submission_ms = milliseconds_between(render_extract_start, render_extract_end);
             frame_snapshot->resident_memory_mib = platform::query_process_resident_memory_mib();
             frame_snapshot->draw_calls = render_subsystem.stats().draw_calls;
-            if (transport.using_audio_authority()) {
-                frame_snapshot->audio_drift_ms = 0.0;
-            }
+            frame_snapshot->audio_drift_ms = transport.diagnostics().drift_seconds * 1000.0;
         }
 
         if (dependencies_.application_config.main_loop.max_frame_count > 0 &&
@@ -269,6 +267,7 @@ int SmokeApplication::run() {
     transport.tick(0.0);
     const bool had_audio_authority = transport.using_audio_authority();
     const gameplay::TransportSnapshot final_transport_snapshot = transport.snapshot();
+    const gameplay::TransportDiagnostics final_transport_diagnostics = transport.diagnostics();
     const platform::AudioPlaybackProgress final_playback_progress = had_audio_authority
         ? transport.playback_progress()
         : platform::AudioPlaybackProgress{};
@@ -339,12 +338,20 @@ int SmokeApplication::run() {
         timing_stream << std::fixed << std::setprecision(3)
                       << "Audio authoritative transport: transport=" << final_transport_snapshot.position_seconds
                       << "s stream=" << final_playback_progress.stream_consumed_seconds
-                      << "s raw-output=" << final_playback_progress.authoritative_position_seconds
+                      << "s reported-output=" << final_playback_progress.authoritative_position_seconds
+                      << "s sim=" << final_transport_diagnostics.simulation_position_seconds
                       << "s mode=" << platform::to_string(final_playback_progress.authoritative_position_mode)
                       << " queued=" << final_playback_progress.queued_input_seconds
                       << "s latency=" << final_playback_progress.total_output_latency_seconds
                       << "s clip=" << final_clip_snapshot.rendered_input_frames << '/' << final_clip_snapshot.total_frames
-                      << " drift-ms=0.000";
+                      << " drift-ms=" << (final_transport_diagnostics.drift_seconds * 1000.0)
+                      << " corrections=" << final_transport_diagnostics.correction_count;
+        if (final_transport_diagnostics.recent_correction_count > 0u) {
+            const gameplay::TransportCorrectionEvent& last_correction = final_transport_diagnostics.recent_corrections[0];
+            timing_stream << " last=" << gameplay::to_string(last_correction.correction_type)
+                          << '@' << last_correction.authoritative_position_seconds
+                          << "s apply-ms=" << (last_correction.correction_applied_seconds * 1000.0);
+        }
         crash_safe_log_.write(foundation::LogLevel::Info, timing_stream.str());
     }
 

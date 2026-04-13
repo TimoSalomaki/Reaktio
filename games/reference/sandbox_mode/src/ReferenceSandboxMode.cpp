@@ -16,10 +16,13 @@
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
+#include "reaktio/rhythm/CueTravelModel.hpp"
 #include "reaktio/rhythm/TempoMap.hpp"
+#include "reaktio/rhythm/TimingJudgement.hpp"
 
 #include <array>
 #include <cmath>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -92,6 +95,125 @@ std::string make_rhythm_status(const rhythm::TempoMap& tempo_map) {
     stream << "tempo-map=ok tick@1s=" << second_position.tick << " bar@warp=" << warp_position.bar.bar_index
            << ':' << warp_position.bar.beat_index_in_bar << '+' << warp_position.bar.tick_offset_in_beat;
     return stream.str();
+}
+
+std::vector<rhythm::ScheduledCue> make_demo_cue_schedule() {
+    return {
+        rhythm::ScheduledCue{.hit_tick = 240, .channel_index = 0},
+        rhythm::ScheduledCue{.hit_tick = 480, .channel_index = 1},
+        rhythm::ScheduledCue{.hit_tick = 720, .channel_index = 2},
+        rhythm::ScheduledCue{.hit_tick = 1200, .channel_index = 0},
+        rhythm::ScheduledCue{.hit_tick = 1440, .channel_index = 1},
+        rhythm::ScheduledCue{.hit_tick = 1920, .channel_index = 2},
+        rhythm::ScheduledCue{.hit_tick = 2160, .channel_index = 0},
+        rhythm::ScheduledCue{.hit_tick = 2640, .channel_index = 1},
+        rhythm::ScheduledCue{.hit_tick = 3360, .channel_index = 2},
+        rhythm::ScheduledCue{.hit_tick = 4080, .channel_index = 0},
+        rhythm::ScheduledCue{.hit_tick = 4560, .channel_index = 1},
+        rhythm::ScheduledCue{.hit_tick = 5040, .channel_index = 2},
+        rhythm::ScheduledCue{.hit_tick = 5520, .channel_index = 0},
+    };
+}
+
+rhythm::TimingOffsetProfile make_demo_timing_offsets() noexcept {
+    return rhythm::TimingOffsetProfile{
+        .manual_global_offset_microseconds = 8000,
+    };
+}
+
+std::uint8_t judgement_attribute(rhythm::TimingJudgement judgement) noexcept {
+    switch (judgement) {
+    case rhythm::TimingJudgement::Perfect:
+        return 0x0f;
+    case rhythm::TimingJudgement::Great:
+        return 0x0b;
+    case rhythm::TimingJudgement::Good:
+        return 0x0e;
+    case rhythm::TimingJudgement::Miss:
+        return 0x0c;
+    case rhythm::TimingJudgement::None:
+        break;
+    }
+
+    return 0x08;
+}
+
+rhythm::CueTravelWindow make_demo_cue_travel_window() noexcept {
+    return rhythm::CueTravelWindow{
+        .pre_hit_visible_ticks = 960,
+        .post_hit_visible_ticks = 240,
+    };
+}
+
+rhythm::LinearCueTravelPath make_lane_travel_path(std::uint32_t channel_index) noexcept {
+    const std::size_t lane = static_cast<std::size_t>(channel_index % k_lane_root_x.size());
+    const float hit_x = k_lane_root_x[lane];
+    const bool moving_right = k_lane_velocity_x[lane] >= 0.0f;
+    return rhythm::LinearCueTravelPath{
+        .spawn_x = hit_x + (moving_right ? -180.0f : 180.0f),
+        .hit_x = hit_x,
+        .release_x = hit_x + (moving_right ? 96.0f : -96.0f),
+    };
+}
+
+render::Color4 scheduled_cue_color(std::uint32_t channel_index, rhythm::CueTravelPhase phase) noexcept {
+    const float lane_tint = static_cast<float>(channel_index % 3u) * 0.18f;
+    switch (phase) {
+    case rhythm::CueTravelPhase::Approaching:
+        return render::Color4{0.85f - lane_tint * 0.3f, 0.55f + lane_tint, 0.95f, 0.72f};
+    case rhythm::CueTravelPhase::Release:
+        return render::Color4{1.0f, 0.72f - lane_tint * 0.2f, 0.35f + lane_tint * 0.4f, 0.58f};
+    case rhythm::CueTravelPhase::Hidden:
+        break;
+    }
+
+    return render::Color4{};
+}
+
+void refresh_rhythm_debug_state(
+    const rhythm::TempoMap& tempo_map,
+    std::span<const rhythm::ScheduledCue> scheduled_cues,
+    const rhythm::TimingWindowSet& judgement_window_set,
+    const rhythm::TimingOffsetProfile& judgement_offset_profile,
+    const gameplay::TransportSnapshot& transport_snapshot,
+    rhythm::RhythmPosition& rhythm_position,
+    rhythm::TimingJudgementResult& nearest_judgement,
+    double& nearest_cue_timing_error_ms,
+    std::size_t& visible_scheduled_cue_count) {
+    rhythm_position = tempo_map.position_from_seconds(transport_snapshot.position_seconds);
+    nearest_judgement = {};
+    nearest_cue_timing_error_ms = 0.0;
+    visible_scheduled_cue_count = 0;
+
+    if (!tempo_map.valid()) {
+        return;
+    }
+
+    const rhythm::CueTravelWindow travel_window = make_demo_cue_travel_window();
+    if (const rhythm::ScheduledCue* nearest_cue =
+            rhythm::find_nearest_cue_by_time(scheduled_cues, tempo_map, rhythm_position.microseconds);
+        nearest_cue != nullptr) {
+        nearest_judgement = rhythm::evaluate_timing_judgement(
+            tempo_map,
+            judgement_window_set,
+            nearest_cue->hit_tick,
+            rhythm_position.microseconds,
+            judgement_offset_profile);
+        nearest_cue_timing_error_ms = static_cast<double>(
+            rhythm_position.microseconds - tempo_map.microseconds_from_tick(nearest_cue->hit_tick)) /
+            1000.0;
+    }
+
+    for (const rhythm::ScheduledCue& scheduled_cue : scheduled_cues) {
+        const rhythm::CueTravelState travel_state = rhythm::sample_cue_travel(
+            tempo_map,
+            rhythm_position.tick,
+            scheduled_cue,
+            travel_window);
+        if (travel_state.visible) {
+            ++visible_scheduled_cue_count;
+        }
+    }
 }
 
 std::uint32_t state_color(const gameplay::TransportSnapshot& transport_snapshot) noexcept {
@@ -816,6 +938,12 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     rhythm_tempo_map_.clear();
     (void)rhythm_tempo_map_.rebuild(make_demo_tempo_map_definition());
     rhythm_status_ = make_rhythm_status(rhythm_tempo_map_);
+    scheduled_cues_ = make_demo_cue_schedule();
+    judgement_window_set_ = rhythm::make_default_timing_window_set();
+    judgement_offset_profile_ = make_demo_timing_offsets();
+    nearest_judgement_ = {};
+    nearest_cue_timing_error_ms_ = 0.0;
+    visible_scheduled_cue_count_ = 0;
 
     seed_resources(
         host.resource_registry(),
@@ -875,7 +1003,16 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
 
     host.random_service().reset_streams();
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
-    rhythm_position_ = rhythm_tempo_map_.position_from_seconds(transport_snapshot.position_seconds);
+    refresh_rhythm_debug_state(
+        rhythm_tempo_map_,
+        scheduled_cues_,
+        judgement_window_set_,
+        judgement_offset_profile_,
+        transport_snapshot,
+        rhythm_position_,
+        nearest_judgement_,
+        nearest_cue_timing_error_ms_,
+        visible_scheduled_cue_count_);
     const std::uint64_t checkpoint_hash = make_state_hash(
         fixed_steps_,
         transport_snapshot,
@@ -948,7 +1085,16 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
     motion_report_ = gameplay::integrate_motion(host.world_model(), fixed_delta_seconds);
 
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
-    rhythm_position_ = rhythm_tempo_map_.position_from_seconds(transport_snapshot.position_seconds);
+    refresh_rhythm_debug_state(
+        rhythm_tempo_map_,
+        scheduled_cues_,
+        judgement_window_set_,
+        judgement_offset_profile_,
+        transport_snapshot,
+        rhythm_position_,
+        nearest_judgement_,
+        nearest_cue_timing_error_ms_,
+        visible_scheduled_cue_count_);
     propagate_and_refresh(
         propagation_report_,
         collision_report_,
@@ -995,14 +1141,23 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
 
     foundation::TelemetrySnapshot snapshot{};
     snapshot.audio_drift_ms = 0.00;
-    snapshot.visible_cues = 3;
+    snapshot.visible_cues = static_cast<std::uint32_t>(std::max<std::size_t>(3u, visible_scheduled_cue_count_));
     snapshot.draw_calls = 0;
     host.telemetry().record(snapshot);
 }
 
 void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) {
     const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
-    rhythm_position_ = rhythm_tempo_map_.position_from_seconds(transport_snapshot.position_seconds);
+    refresh_rhythm_debug_state(
+        rhythm_tempo_map_,
+        scheduled_cues_,
+        judgement_window_set_,
+        judgement_offset_profile_,
+        transport_snapshot,
+        rhythm_position_,
+        nearest_judgement_,
+        nearest_cue_timing_error_ms_,
+        visible_scheduled_cue_count_);
     const platform::InputSnapshot& input_snapshot = host.input_snapshot();
     const foundation::DeterministicRandomService& random_service = host.random_service();
     const foundation::DeterministicRng* transport_rng = random_service.find_stream("reference-sandbox.transport");
@@ -1011,6 +1166,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     const gameplay::EventRecord* last_event = event_bus.last();
     const gameplay::ReplayRecorder& replay_recorder = host.replay();
     const gameplay::ReplayCheckpoint* last_checkpoint = replay_recorder.last_checkpoint();
+    const gameplay::TransportDiagnostics& transport_diagnostics = host.transport().diagnostics();
 
     host.render_extraction().set_view_camera(
         reaktio::render::RenderView::MainScene,
@@ -1047,24 +1203,95 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                 << transport_snapshot.advanced_fixed_steps;
     host.render_extraction().add_debug_text(0, 9, 0x0e, loop_stream.str());
 
+    const double drift_milliseconds = transport_diagnostics.drift_seconds * 1000.0;
+    const double absolute_drift_milliseconds = std::abs(drift_milliseconds);
+    const std::uint8_t inspector_attribute = absolute_drift_milliseconds >=
+            transport_diagnostics.correction_policy.hard_snap_threshold_seconds * 1000.0
+        ? 0x0c
+        : (absolute_drift_milliseconds >= transport_diagnostics.correction_policy.soft_correction_threshold_seconds * 1000.0
+            ? 0x0e
+            : 0x0f);
+    std::ostringstream inspector_stream;
+    inspector_stream << std::fixed << std::setprecision(3)
+                     << "inspector audio=" << transport_diagnostics.authoritative_position_seconds
+                     << "s sim=" << transport_diagnostics.simulation_position_seconds
+                     << "s drift-ms=" << drift_milliseconds
+                     << " reported=" << transport_diagnostics.reported_output_position_seconds
+                     << "s lat-ms=" << (transport_diagnostics.total_output_latency_seconds * 1000.0);
+    host.render_extraction().add_debug_text(0, 10, inspector_attribute, inspector_stream.str());
+
+    std::ostringstream correction_stream;
+    correction_stream << std::fixed << std::setprecision(3)
+                      << "corr count=" << transport_diagnostics.correction_count
+                      << " soft-ms=" << (transport_diagnostics.correction_policy.soft_correction_threshold_seconds * 1000.0)
+                      << " hard-ms=" << (transport_diagnostics.correction_policy.hard_snap_threshold_seconds * 1000.0)
+                      << " step-ms=" << (transport_diagnostics.correction_policy.max_soft_correction_step_seconds * 1000.0);
+    if (transport_diagnostics.recent_correction_count > 0u) {
+        const gameplay::TransportCorrectionEvent& last_correction = transport_diagnostics.recent_corrections[0];
+        correction_stream << " last=" << gameplay::to_string(last_correction.correction_type)
+                          << " drift-ms=" << (last_correction.drift_before_seconds * 1000.0)
+                          << " apply-ms=" << (last_correction.correction_applied_seconds * 1000.0);
+    }
+    host.render_extraction().add_debug_text(0, 11, 0x08, correction_stream.str());
+
     std::ostringstream rhythm_stream;
     if (rhythm_tempo_map_.valid()) {
+        rhythm_stream << std::fixed << std::setprecision(1);
         rhythm_stream << "rhythm tick=" << rhythm_position_.tick << " beat=" << rhythm_position_.beat.whole_beats
                       << '+' << rhythm_position_.beat.tick_offset_in_beat << " bar="
                       << rhythm_position_.bar.bar_index << ':' << rhythm_position_.bar.beat_index_in_bar
                       << '+' << rhythm_position_.bar.tick_offset_in_beat << " sample="
-                      << rhythm_position_.sample_index;
+                      << rhythm_position_.sample_index << " err-ms=" << nearest_cue_timing_error_ms_
+                      << " visible=" << visible_scheduled_cue_count_;
     } else {
         rhythm_stream << rhythm_status_;
     }
-    host.render_extraction().add_debug_text(0, 10, 0x0d, rhythm_stream.str());
+    host.render_extraction().add_debug_text(0, 12, 0x0d, rhythm_stream.str());
+
+    std::ostringstream judgement_stream;
+    judgement_stream << std::fixed << std::setprecision(1)
+                     << "judge=" << rhythm::to_string(nearest_judgement_.judgement)
+                     << " corr-ms=" << static_cast<double>(nearest_judgement_.corrected_error_microseconds) / 1000.0
+                     << " raw-ms=" << static_cast<double>(nearest_judgement_.raw_error_microseconds) / 1000.0
+                     << " offset-ms=" << static_cast<double>(nearest_judgement_.applied_offset_microseconds) / 1000.0
+                     << " hit=" << nearest_judgement_.scoreable_hit
+                     << " combo=" << nearest_judgement_.advances_combo;
+    host.render_extraction().add_debug_text(0, 13, judgement_attribute(nearest_judgement_.judgement), judgement_stream.str());
+
+    std::array<rhythm::ScheduledCue, 4> upcoming_cues{};
+    const std::size_t upcoming_count = rhythm::collect_upcoming_cues(
+        scheduled_cues_,
+        rhythm_position_.tick,
+        1920,
+        upcoming_cues);
+    for (std::size_t index = 0; index < upcoming_cues.size(); ++index) {
+        std::ostringstream upcoming_stream;
+        if (index < upcoming_count && rhythm_tempo_map_.valid()) {
+            const rhythm::ScheduledCue& scheduled_cue = upcoming_cues[index];
+            const rhythm::RhythmPosition cue_position = rhythm_tempo_map_.position_from_tick(scheduled_cue.hit_tick);
+            const rhythm::CueTravelState travel_state = rhythm::sample_cue_travel(
+                rhythm_tempo_map_,
+                rhythm_position_.tick,
+                scheduled_cue,
+                make_demo_cue_travel_window());
+            upcoming_stream << std::fixed << std::setprecision(1)
+                            << "up[" << index << "] ch=" << scheduled_cue.channel_index
+                            << " hit=" << cue_position.bar.bar_index << ':' << cue_position.bar.beat_index_in_bar
+                            << '+' << cue_position.bar.tick_offset_in_beat << " dt-ms="
+                            << (-travel_state.delta_seconds * 1000.0)
+                            << " phase=" << rhythm::to_string(travel_state.phase);
+        } else {
+            upcoming_stream << "up[" << index << "] none";
+        }
+        host.render_extraction().add_debug_text(0, static_cast<std::uint16_t>(14 + index), 0x09, upcoming_stream.str());
+    }
 
     std::ostringstream input_stream;
     input_stream << "keys=" << input_snapshot.keyboard_events().size() << " mouse="
                  << input_snapshot.mouse_button_events().size() << " text="
                  << input_snapshot.text_input_events().size() << " gamepads="
                  << input_snapshot.connected_gamepads().size();
-    host.render_extraction().add_debug_text(0, 11, 0x0a, input_stream.str());
+    host.render_extraction().add_debug_text(0, 18, 0x0a, input_stream.str());
 
     std::ostringstream rng_stream;
     rng_stream << "rng root=0x" << std::hex << random_service.root_seed() << std::dec
@@ -1072,24 +1299,24 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                << transport_roll_ << " visual-roll=" << visual_roll_ << " draws="
                << (transport_rng != nullptr ? transport_rng->generated_values() : 0) << '/'
                << (visual_rng != nullptr ? visual_rng->generated_values() : 0);
-    host.render_extraction().add_debug_text(0, 12, 0x0d, rng_stream.str());
+    host.render_extraction().add_debug_text(0, 19, 0x0d, rng_stream.str());
 
     std::ostringstream replay_stream;
     replay_stream << "replay inputs=" << replay_recorder.input_frame_count() << " checkpoints="
                   << replay_recorder.checkpoint_count() << " last="
                   << (last_checkpoint != nullptr ? last_checkpoint->label : std::string_view("none"));
-    host.render_extraction().add_debug_text(0, 13, 0x0c, replay_stream.str());
+    host.render_extraction().add_debug_text(0, 20, 0x0c, replay_stream.str());
 
     std::ostringstream event_stream;
     event_stream << "events=" << event_bus.published_count() << '/' << event_bus.count() << " last="
                  << (last_event != nullptr ? gameplay::describe_event(*last_event) : std::string("none"));
-    host.render_extraction().add_debug_text(0, 14, 0x0b, event_stream.str());
+    host.render_extraction().add_debug_text(0, 21, 0x0b, event_stream.str());
 
     std::ostringstream world_stream;
     world_stream << "world entities=" << world_entity_count_ << " phase=" << average_phase_
                  << " sample=" << sample_first_label(host.world_model()) << " x=" << sample_cue_world_x_
                  << " tip-z=" << sample_tip_world_.z;
-    host.render_extraction().add_debug_text(0, 15, 0x0f, world_stream.str());
+    host.render_extraction().add_debug_text(0, 22, 0x0f, world_stream.str());
 
     std::ostringstream transform_stream;
     transform_stream << "propagate 2d=" << propagation_report_.propagated_2d << " 3d="
@@ -1097,7 +1324,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                      << (propagation_report_.detached_2d + propagation_report_.detached_3d) << " stale="
                      << (propagation_report_.stale_world_transforms_2d + propagation_report_.stale_world_transforms_3d)
                      << " cycles=" << (propagation_report_.cycle_breaks_2d + propagation_report_.cycle_breaks_3d);
-    host.render_extraction().add_debug_text(0, 16, 0x0e, transform_stream.str());
+    host.render_extraction().add_debug_text(0, 23, 0x0e, transform_stream.str());
 
     std::ostringstream motion_stream;
     motion_stream << "motion l2=" << motion_report_.linear_2d << " a2=" << motion_report_.angular_2d
@@ -1107,7 +1334,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         motion_stream << " first=" << gameplay::to_string(collision_report_.contacts.front().shape_pair)
                       << " pen=" << collision_report_.contacts.front().penetration;
     }
-    host.render_extraction().add_debug_text(0, 17, 0x0d, motion_stream.str());
+    host.render_extraction().add_debug_text(0, 24, 0x0d, motion_stream.str());
 
     std::ostringstream resource_stream;
     resource_stream << "resources count=" << resource_summary_.resource_count << " rev=" << resource_summary_.revision
@@ -1126,19 +1353,19 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                     << " mesh-h=" << rig_mesh_handle_.value() << '/' << rig_mesh_runtime_label_
                     << " debug=" << debug_font_handle_.value() << '/' << debug_font_runtime_label_
                     << " stale=" << stale_debug_font_borrow_valid_;
-    host.render_extraction().add_debug_text(0, 18, 0x0c, resource_stream.str());
+    host.render_extraction().add_debug_text(0, 25, 0x0c, resource_stream.str());
 
     std::ostringstream config_stream;
     config_stream << "cfg speed=" << configured_velocity_scale_ << " hit=" << configured_hit_window_half_width_
                   << 'x' << configured_hit_window_half_height_ << " cue-id="
                   << configured_cue_material_authoring_id_ << " font-id="
                   << configured_debug_font_authoring_id_;
-    host.render_extraction().add_debug_text(0, 19, 0x0b, config_stream.str());
+    host.render_extraction().add_debug_text(0, 26, 0x0b, config_stream.str());
 
     std::ostringstream binding_stream;
     binding_stream << "bindings pause=" << configured_transport_pause_binding_
                    << " restart=" << configured_transport_restart_binding_;
-    host.render_extraction().add_debug_text(0, 20, 0x0a, binding_stream.str());
+    host.render_extraction().add_debug_text(0, 27, 0x0a, binding_stream.str());
 
     // Exercise the new render paths: sprites for cue positions, debug shapes for hit windows,
     // and lines for lane baselines.
@@ -1180,6 +1407,35 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         };
     }
     gameplay::emit_cue_lane_debug_visualizations(host.render_extraction(), lane_visualizations);
+
+    render::InstancedQuadBatchCommand scheduled_cue_batch{
+        .view = render::RenderView::MainScene,
+    };
+    scheduled_cue_batch.quads.reserve(scheduled_cues_.size());
+    for (const rhythm::ScheduledCue& scheduled_cue : scheduled_cues_) {
+        const rhythm::CueTravelState travel_state = rhythm::sample_cue_travel(
+            rhythm_tempo_map_,
+            rhythm_position_.tick,
+            scheduled_cue,
+            make_demo_cue_travel_window());
+        if (!travel_state.visible) {
+            continue;
+        }
+
+        const std::size_t lane = static_cast<std::size_t>(scheduled_cue.channel_index % k_lane_center_y.size());
+        scheduled_cue_batch.quads.push_back(render::InstancedQuadInstance{
+            .position = {
+                rhythm::sample_linear_cue_position_x(travel_state, make_lane_travel_path(scheduled_cue.channel_index)),
+                k_lane_center_y[lane] - 46.0f,
+            },
+            .size = {20.0f, 20.0f},
+            .rotation_radians = travel_state.phase == rhythm::CueTravelPhase::Release ? 0.35f : -0.2f,
+            .color = scheduled_cue_color(scheduled_cue.channel_index, travel_state.phase),
+        });
+    }
+    if (!scheduled_cue_batch.quads.empty()) {
+        host.render_extraction().add_instanced_quad_batch(scheduled_cue_batch);
+    }
 
     render::QuadBatchCommand note_field_batch{
         .view = render::RenderView::MainScene,

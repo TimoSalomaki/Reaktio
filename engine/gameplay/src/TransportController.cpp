@@ -7,10 +7,15 @@ namespace reaktio::gameplay {
 
 TransportController::TransportController(double duration_seconds) noexcept {
     set_duration(duration_seconds);
+    refresh_diagnostics();
 }
 
 const TransportSnapshot& TransportController::snapshot() const noexcept {
     return snapshot_;
+}
+
+const TransportDiagnostics& TransportController::diagnostics() const noexcept {
+    return diagnostics_;
 }
 
 void TransportController::play() noexcept {
@@ -30,11 +35,13 @@ void TransportController::play() noexcept {
     }
 
     snapshot_.playback_state = TransportPlaybackState::Playing;
+    refresh_diagnostics();
 }
 
 void TransportController::pause() noexcept {
     if (snapshot_.playback_state == TransportPlaybackState::Playing) {
         snapshot_.playback_state = TransportPlaybackState::Paused;
+        refresh_diagnostics();
     }
 }
 
@@ -48,6 +55,7 @@ void TransportController::stop() noexcept {
     if (was_preview || previous_state != TransportPlaybackState::Stopped || position_changed(previous_position, 0.0)) {
         record_discontinuity(TransportDiscontinuityReason::Stop, previous_position, snapshot_.position_seconds);
     }
+    refresh_diagnostics();
 }
 
 void TransportController::restart() noexcept {
@@ -62,6 +70,7 @@ void TransportController::restart() noexcept {
 
     snapshot_.playback_state = TransportPlaybackState::Playing;
     record_discontinuity(TransportDiscontinuityReason::Restart, previous_position, snapshot_.position_seconds);
+    refresh_diagnostics();
 }
 
 void TransportController::seek(double position_seconds) noexcept {
@@ -77,6 +86,7 @@ void TransportController::seek(double position_seconds) noexcept {
     if (position_changed(previous_position, snapshot_.position_seconds)) {
         record_discontinuity(TransportDiscontinuityReason::Seek, previous_position, snapshot_.position_seconds);
     }
+    refresh_diagnostics();
 }
 
 void TransportController::preview(double start_seconds, double end_seconds) noexcept {
@@ -96,6 +106,7 @@ void TransportController::preview(double start_seconds, double end_seconds) noex
     snapshot_.position_seconds = clamped_start;
     snapshot_.playback_state = TransportPlaybackState::Playing;
     record_discontinuity(TransportDiscontinuityReason::PreviewStart, previous_position, snapshot_.position_seconds);
+    refresh_diagnostics();
 }
 
 void TransportController::set_loop_region(double start_seconds, double end_seconds) noexcept {
@@ -122,10 +133,12 @@ void TransportController::set_loop_region(double start_seconds, double end_secon
             previous_position,
             snapshot_.position_seconds);
     }
+    refresh_diagnostics();
 }
 
 void TransportController::clear_loop_region() noexcept {
     snapshot_.loop_region = TransportLoopRegion{};
+    refresh_diagnostics();
 }
 
 void TransportController::set_duration(double duration_seconds) noexcept {
@@ -164,6 +177,7 @@ void TransportController::set_duration(double duration_seconds) noexcept {
     if (position_changed(previous_position, snapshot_.position_seconds)) {
         record_discontinuity(TransportDiscontinuityReason::DurationClamp, previous_position, snapshot_.position_seconds);
     }
+    refresh_diagnostics();
 }
 
 void TransportController::set_playback_rate(double playback_rate) noexcept {
@@ -172,11 +186,13 @@ void TransportController::set_playback_rate(double playback_rate) noexcept {
     }
 
     snapshot_.playback_rate = std::clamp(playback_rate, 0.01, 8.0);
+    refresh_diagnostics();
 }
 
 void TransportController::advance(double delta_seconds) noexcept {
     snapshot_.position_authority = TransportPositionAuthority::Simulation;
     if (snapshot_.playback_state != TransportPlaybackState::Playing || delta_seconds <= 0.0) {
+        refresh_diagnostics();
         return;
     }
 
@@ -196,6 +212,7 @@ void TransportController::advance(double delta_seconds) noexcept {
                 previous_position,
                 snapshot_.position_seconds);
             clear_preview_region();
+            refresh_diagnostics();
             return;
         }
 
@@ -203,6 +220,7 @@ void TransportController::advance(double delta_seconds) noexcept {
             next_position,
             snapshot_.preview_region.start_seconds,
             snapshot_.preview_region.end_seconds);
+        refresh_diagnostics();
         return;
     }
 
@@ -228,10 +246,12 @@ void TransportController::advance(double delta_seconds) noexcept {
         snapshot_.position_seconds = snapshot_.duration_seconds;
         snapshot_.playback_state = TransportPlaybackState::Stopped;
     }
+    refresh_diagnostics();
 }
 
 void TransportController::sync_from_authoritative_snapshot(const TransportSnapshot& snapshot) noexcept {
     snapshot_ = snapshot;
+    refresh_diagnostics();
 }
 
 double TransportController::clamp_position(double position_seconds, double duration_seconds) noexcept {
@@ -251,6 +271,18 @@ bool TransportController::is_valid_region(double start_seconds, double end_secon
 
 bool TransportController::position_changed(double lhs, double rhs) noexcept {
     return std::abs(lhs - rhs) > 0.000001;
+}
+
+void TransportController::refresh_diagnostics() noexcept {
+    diagnostics_.using_audio_authority = snapshot_.position_authority == TransportPositionAuthority::AudioOutput;
+    diagnostics_.authoritative_position_seconds = snapshot_.position_seconds;
+    diagnostics_.simulation_position_seconds = snapshot_.position_seconds;
+    diagnostics_.drift_seconds = 0.0;
+    diagnostics_.stream_consumed_seconds = snapshot_.position_seconds;
+    diagnostics_.reported_output_position_seconds = snapshot_.position_seconds;
+    diagnostics_.queued_input_seconds = 0.0;
+    diagnostics_.device_latency_seconds = 0.0;
+    diagnostics_.total_output_latency_seconds = 0.0;
 }
 
 void TransportController::clear_preview_region() noexcept {

@@ -218,14 +218,14 @@ These are support libraries, not replacements for SDL or bgfx.
 - [x] Implement a tempo map that supports BPM changes, time signatures, stops, and optional warps.
 - [x] Implement conversions between samples, seconds, beats, bars, and chart ticks using 64-bit integer math where authoritative.
 - [x] Define seek, restart, and loop semantics so transport state changes never create hidden score-affecting discontinuities.
-- [ ] Implement note scroll or travel models that are independent from cue identity.
+- [x] Implement note scroll or travel models that are independent from cue identity.
 - [ ] Add latency calibration flows for audio output and input response.
-- [ ] Add drift detection and correction between simulation time and audio time.
-- [ ] Define a correction policy that keeps transport aligned without retroactively changing past judgements.
-- [ ] Implement hit windows, timing offsets, and judgement logic at the rhythm-domain level.
+- [x] Add drift detection and correction between simulation time and audio time.
+- [x] Define a correction policy that keeps transport aligned without retroactively changing past judgements.
+- [x] Implement hit windows, timing offsets, and judgement logic at the rhythm-domain level.
 - [ ] Add practice features such as speed modifiers, looping segments, and offset visualization.
-- [ ] Add rhythm debug tooling that can display current beat, bar, timing error, and scheduled upcoming cues.
-- [ ] Add a transport inspector showing reported audio time, simulation time, drift, latency estimate, and correction events.
+- [x] Add rhythm debug tooling that can display current beat, bar, timing error, and scheduled upcoming cues.
+- [x] Add a transport inspector showing reported audio time, simulation time, drift, latency estimate, and correction events.
 
 ### Phase 6 - Content Model and Asset Pipeline
 

@@ -9,6 +9,7 @@ class TransportController final : public ITransportControl {
     explicit TransportController(double duration_seconds = 180.0) noexcept;
 
     [[nodiscard]] const TransportSnapshot& snapshot() const noexcept override;
+    [[nodiscard]] const TransportDiagnostics& diagnostics() const noexcept override;
     void play() noexcept override;
     void pause() noexcept override;
     void stop() noexcept override;
@@ -29,6 +30,7 @@ class TransportController final : public ITransportControl {
     static bool is_valid_region(double start_seconds, double end_seconds) noexcept;
     static bool position_changed(double lhs, double rhs) noexcept;
 
+    void refresh_diagnostics() noexcept;
     void clear_preview_region() noexcept;
     void record_discontinuity(
       TransportDiscontinuityReason reason,
@@ -36,6 +38,7 @@ class TransportController final : public ITransportControl {
       double to_seconds) noexcept;
 
     TransportSnapshot snapshot_{};
+    TransportDiagnostics diagnostics_{};
 };
 
 } // namespace reaktio::gameplay

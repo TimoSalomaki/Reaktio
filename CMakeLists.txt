@@ -66,7 +66,9 @@ target_compile_definitions(reaktio_foundation
 reaktio_configure_target(reaktio_foundation)
 
 add_library(reaktio_rhythm STATIC
+    engine/rhythm/src/CueTravelModel.cpp
     engine/rhythm/src/TempoMap.cpp
+    engine/rhythm/src/TimingJudgement.cpp
 )
 add_library(Reaktio::rhythm ALIAS reaktio_rhythm)
 target_include_directories(reaktio_rhythm
@@ -177,6 +179,7 @@ add_library(reaktio_app STATIC
     engine/app/src/AuthoritativeAudioTransport.cpp
     engine/app/src/RuntimeConfiguration.cpp
     engine/app/src/SmokeApplication.cpp
+    engine/app/src/TransportAlignmentTracker.cpp
     engine/app/src/TransportDrivenAudioSource.cpp
 )
 add_library(Reaktio::app ALIAS reaktio_app)

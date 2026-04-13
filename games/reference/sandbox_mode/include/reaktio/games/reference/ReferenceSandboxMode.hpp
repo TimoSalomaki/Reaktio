@@ -4,11 +4,14 @@
 #include "reaktio/gameplay/IGameMode.hpp"
 #include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
+#include "reaktio/rhythm/CueTravelModel.hpp"
 #include "reaktio/rhythm/TempoMap.hpp"
+#include "reaktio/rhythm/TimingJudgement.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace reaktio::games::reference {
 
@@ -54,6 +57,12 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     rhythm::TempoMap rhythm_tempo_map_{};
     rhythm::RhythmPosition rhythm_position_{};
     std::string rhythm_status_{"tempo-map=uninitialized"};
+    std::vector<rhythm::ScheduledCue> scheduled_cues_{};
+    rhythm::TimingWindowSet judgement_window_set_{};
+    rhythm::TimingOffsetProfile judgement_offset_profile_{};
+    rhythm::TimingJudgementResult nearest_judgement_{};
+    double nearest_cue_timing_error_ms_{};
+    std::size_t visible_scheduled_cue_count_{};
     gameplay::MotionIntegrationReport motion_report_{};
     gameplay::CollisionDetectionReport collision_report_{};
     gameplay::TransformPropagationReport propagation_report_{};

@@ -57,11 +57,13 @@ bool AuthoritativeAudioTransport::bind_audio_clip(
     foundation::CrashSafeLog& log) {
     transport_ = gameplay::TransportController{clip.duration_seconds};
     if (!clip_source_.bind_clip(clip, device.info().requested_spec, log)) {
+        refresh_alignment_diagnostics(0.0);
         return false;
     }
 
     if (!device.bind_playback_source(clip_source_)) {
         clip_source_.reset();
+        refresh_alignment_diagnostics(0.0);
         return false;
     }
 
@@ -69,7 +71,9 @@ bool AuthoritativeAudioTransport::bind_audio_clip(
     using_audio_authority_ = true;
     update_device_stream_origin();
     sync_from_audio(false);
+    alignment_tracker_.reset_to_authoritative(transport_.snapshot());
     pause_or_resume_device_for_current_state();
+    refresh_alignment_diagnostics(0.0);
     return true;
 }
 
@@ -82,16 +86,19 @@ void AuthoritativeAudioTransport::unbind_audio_clip() noexcept {
 
     clip_source_.reset();
     using_audio_authority_ = false;
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::tick(double simulation_delta_seconds) noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.advance(simulation_delta_seconds);
+        refresh_alignment_diagnostics(simulation_delta_seconds);
         return;
     }
 
     sync_from_audio(true);
     pause_or_resume_device_for_current_state();
+    refresh_alignment_diagnostics(simulation_delta_seconds);
 }
 
 bool AuthoritativeAudioTransport::using_audio_authority() const noexcept {
@@ -110,31 +117,40 @@ const gameplay::TransportSnapshot& AuthoritativeAudioTransport::snapshot() const
     return transport_.snapshot();
 }
 
+const gameplay::TransportDiagnostics& AuthoritativeAudioTransport::diagnostics() const noexcept {
+    return alignment_tracker_.diagnostics();
+}
+
 void AuthoritativeAudioTransport::play() noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.play();
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
     clip_source_.play();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::pause() noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.pause();
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
     clip_source_.pause();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::stop() noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.stop();
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
@@ -143,11 +159,13 @@ void AuthoritativeAudioTransport::stop() noexcept {
     bound_device_->clear_stream();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::restart() noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.restart();
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
@@ -156,11 +174,13 @@ void AuthoritativeAudioTransport::restart() noexcept {
     bound_device_->clear_stream();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::seek(double position_seconds) noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.seek(position_seconds);
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
@@ -169,11 +189,13 @@ void AuthoritativeAudioTransport::seek(double position_seconds) noexcept {
     bound_device_->clear_stream();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::preview(double start_seconds, double end_seconds) noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.preview(start_seconds, end_seconds);
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
@@ -182,11 +204,13 @@ void AuthoritativeAudioTransport::preview(double start_seconds, double end_secon
     bound_device_->clear_stream();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::set_loop_region(double start_seconds, double end_seconds) noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.set_loop_region(start_seconds, end_seconds);
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
@@ -195,11 +219,13 @@ void AuthoritativeAudioTransport::set_loop_region(double start_seconds, double e
     bound_device_->clear_stream();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
 }
 
 void AuthoritativeAudioTransport::clear_loop_region() noexcept {
     if (!using_audio_authority_ || bound_device_ == nullptr) {
         transport_.clear_loop_region();
+        refresh_alignment_diagnostics(0.0);
         return;
     }
 
@@ -208,6 +234,19 @@ void AuthoritativeAudioTransport::clear_loop_region() noexcept {
     bound_device_->clear_stream();
     pause_or_resume_device_for_current_state();
     sync_from_audio(false);
+    refresh_alignment_diagnostics(0.0);
+}
+
+void AuthoritativeAudioTransport::refresh_alignment_diagnostics(double simulation_delta_seconds) noexcept {
+    if (using_audio_authority_ && bound_device_ != nullptr) {
+        alignment_tracker_.update_from_audio(
+            simulation_delta_seconds,
+            transport_.snapshot(),
+            bound_device_->playback_progress());
+        return;
+    }
+
+    alignment_tracker_.update_from_simulation(transport_.snapshot());
 }
 
 void AuthoritativeAudioTransport::sync_from_audio(bool use_device_position) noexcept {
