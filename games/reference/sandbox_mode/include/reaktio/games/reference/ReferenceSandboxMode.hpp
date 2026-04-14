@@ -5,15 +5,36 @@
 #include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
 #include "reaktio/rhythm/CueTravelModel.hpp"
+#include "reaktio/rhythm/LatencyCalibration.hpp"
 #include "reaktio/rhythm/TempoMap.hpp"
 #include "reaktio/rhythm/TimingJudgement.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace reaktio::games::reference {
+
+enum class CalibrationFlowMode : std::uint8_t {
+  None,
+  Output,
+  Input,
+};
+
+[[nodiscard]] inline constexpr std::string_view to_string(CalibrationFlowMode mode) noexcept {
+  switch (mode) {
+  case CalibrationFlowMode::None:
+    return "none";
+  case CalibrationFlowMode::Output:
+    return "output";
+  case CalibrationFlowMode::Input:
+    return "input";
+  }
+
+  return "unknown";
+}
 
 class ReferenceSandboxMode final : public gameplay::IGameMode {
   public:
@@ -31,6 +52,20 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::uint32_t visual_roll_{};
     std::string configured_transport_pause_binding_{"keyboard:Space"};
     std::string configured_transport_restart_binding_{"keyboard:R"};
+    std::string configured_calibration_output_binding_{"keyboard:O"};
+    std::string configured_calibration_input_binding_{"keyboard:I"};
+    std::string configured_calibration_commit_binding_{"keyboard:Return"};
+    std::string configured_calibration_clear_binding_{"keyboard:Backspace"};
+    std::string configured_calibration_adjust_negative_binding_{"keyboard:Left"};
+    std::string configured_calibration_adjust_positive_binding_{"keyboard:Right"};
+    std::string configured_practice_speed_decrease_binding_{"keyboard:Z"};
+    std::string configured_practice_speed_increase_binding_{"keyboard:X"};
+    std::string configured_practice_speed_reset_binding_{"keyboard:C"};
+    std::string configured_practice_loop_mark_start_binding_{"keyboard:J"};
+    std::string configured_practice_loop_mark_end_binding_{"keyboard:K"};
+    std::string configured_practice_loop_apply_binding_{"keyboard:L"};
+    std::string configured_practice_loop_clear_binding_{"keyboard:U"};
+    std::string configured_practice_offset_visualization_toggle_binding_{"keyboard:V"};
     float configured_velocity_scale_{1.0f};
     float configured_hit_window_half_width_{32.0f};
     float configured_hit_window_half_height_{24.0f};
@@ -60,6 +95,16 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     std::vector<rhythm::ScheduledCue> scheduled_cues_{};
     rhythm::TimingWindowSet judgement_window_set_{};
     rhythm::TimingOffsetProfile judgement_offset_profile_{};
+    double practice_scroll_speed_multiplier_{1.0};
+    bool practice_offset_visualization_enabled_{true};
+    double practice_loop_marker_start_seconds_{};
+    double practice_loop_marker_end_seconds_{};
+    bool practice_loop_marker_start_set_{};
+    bool practice_loop_marker_end_set_{};
+    CalibrationFlowMode calibration_flow_mode_{CalibrationFlowMode::None};
+    rhythm::LatencyCalibrationSession output_latency_calibration_{rhythm::LatencyCalibrationKind::AudioOutput};
+    rhythm::LatencyCalibrationSession input_latency_calibration_{rhythm::LatencyCalibrationKind::InputResponse};
+    rhythm::TimelineMicroseconds pending_output_offset_microseconds_{};
     rhythm::TimingJudgementResult nearest_judgement_{};
     double nearest_cue_timing_error_ms_{};
     std::size_t visible_scheduled_cue_count_{};

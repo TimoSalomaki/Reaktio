@@ -13,10 +13,13 @@
 #include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/FrameClock.hpp"
 #include "reaktio/platform/InputBindings.hpp"
+#include "reaktio/platform/InputBindingQueries.hpp"
 #include "reaktio/platform/InputSnapshot.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 #include "reaktio/rhythm/CueTravelModel.hpp"
+#include "reaktio/rhythm/LatencyCalibration.hpp"
+#include "reaktio/rhythm/PracticeMode.hpp"
 #include "reaktio/rhythm/TempoMap.hpp"
 #include "reaktio/rhythm/TimingJudgement.hpp"
 
@@ -34,12 +37,27 @@ namespace {
 constexpr std::array<float, 3> k_lane_root_x{-240.0f, 0.0f, 240.0f};
 constexpr std::array<float, 3> k_lane_center_y{-120.0f, 0.0f, 120.0f};
 constexpr std::array<float, 3> k_lane_velocity_x{72.0f, -48.0f, 60.0f};
+constexpr double k_practice_scroll_speed_step = 0.25;
+constexpr rhythm::TimelineMicroseconds k_calibration_adjust_step_microseconds = 1000;
+constexpr rhythm::TimelineMicroseconds k_output_calibration_limit_microseconds = 150000;
+constexpr rhythm::TimelineMicroseconds k_input_calibration_capture_window_microseconds = 160000;
 
 const gameplay::ModeDescriptor k_descriptor{
     .id = "mode.reference.sandbox",
     .display_name = "Reference Sandbox",
     .description = "Reference mode that exercises lifecycle, input, transport control, and render extraction.",
 };
+
+void publish_practice_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    std::string message);
+void sync_practice_loop_markers_from_transport(
+    const gameplay::TransportSnapshot& transport_snapshot,
+    double& practice_loop_marker_start_seconds,
+    double& practice_loop_marker_end_seconds,
+    bool& practice_loop_marker_start_set,
+    bool& practice_loop_marker_end_set) noexcept;
 
 rhythm::TempoMapDefinition make_demo_tempo_map_definition() {
     return rhythm::TempoMapDefinition{
@@ -121,6 +139,19 @@ rhythm::TimingOffsetProfile make_demo_timing_offsets() noexcept {
     };
 }
 
+std::uint8_t calibration_attribute(CalibrationFlowMode mode) noexcept {
+    switch (mode) {
+    case CalibrationFlowMode::Output:
+        return 0x0a;
+    case CalibrationFlowMode::Input:
+        return 0x0b;
+    case CalibrationFlowMode::None:
+        break;
+    }
+
+    return 0x08;
+}
+
 std::uint8_t judgement_attribute(rhythm::TimingJudgement judgement) noexcept {
     switch (judgement) {
     case rhythm::TimingJudgement::Perfect:
@@ -136,6 +167,297 @@ std::uint8_t judgement_attribute(rhythm::TimingJudgement judgement) noexcept {
     }
 
     return 0x08;
+}
+
+void publish_calibration_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    std::string message) {
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = std::move(message),
+        });
+}
+
+void apply_calibration_summary(
+    const rhythm::LatencyCalibrationSession& session,
+    rhythm::TimingOffsetProfile& offset_profile) noexcept {
+    if (session.kind() == rhythm::LatencyCalibrationKind::AudioOutput) {
+        offset_profile.audio_output_offset_microseconds = session.summary().recommended_offset_microseconds;
+        return;
+    }
+
+    offset_profile.input_response_offset_microseconds = session.summary().recommended_offset_microseconds;
+}
+
+bool record_output_calibration_sample(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    rhythm::LatencyCalibrationSession& output_calibration,
+    rhythm::TimingOffsetProfile& offset_profile,
+    rhythm::TimelineMicroseconds recommended_offset_microseconds) {
+    if (!output_calibration.add_observation(
+            rhythm::make_audio_output_calibration_observation(recommended_offset_microseconds))) {
+        return false;
+    }
+
+    apply_calibration_summary(output_calibration, offset_profile);
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(1)
+           << "cal-output sample=" << output_calibration.summary().sample_count
+           << " offset-ms=" << static_cast<double>(recommended_offset_microseconds) / 1000.0
+           << " recommended-ms=" << static_cast<double>(output_calibration.summary().recommended_offset_microseconds) / 1000.0;
+    publish_calibration_diagnostic(host, fixed_steps, stream.str());
+    return true;
+}
+
+bool record_input_calibration_sample(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    rhythm::LatencyCalibrationSession& input_calibration,
+    rhythm::TimingOffsetProfile& offset_profile,
+    rhythm::ChartTick cue_hit_tick,
+    rhythm::TimelineMicroseconds input_time_microseconds,
+    const rhythm::TempoMap& tempo_map) {
+    if (!input_calibration.add_observation(
+            rhythm::make_input_response_calibration_observation(
+                tempo_map.microseconds_from_tick(cue_hit_tick),
+                input_time_microseconds,
+                offset_profile))) {
+        return false;
+    }
+
+    apply_calibration_summary(input_calibration, offset_profile);
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(1)
+           << "cal-input sample=" << input_calibration.summary().sample_count
+           << " recommended-ms=" << static_cast<double>(input_calibration.summary().recommended_offset_microseconds) / 1000.0
+           << " cue-tick=" << cue_hit_tick;
+    publish_calibration_diagnostic(host, fixed_steps, stream.str());
+    return true;
+}
+
+const rhythm::ScheduledCue* nearest_capture_cue(
+    std::span<const rhythm::ScheduledCue> scheduled_cues,
+    const rhythm::TempoMap& tempo_map,
+    rhythm::TimelineMicroseconds input_time_microseconds) noexcept {
+    const rhythm::ScheduledCue* nearest_cue =
+        rhythm::find_nearest_cue_by_time(scheduled_cues, tempo_map, input_time_microseconds);
+    if (nearest_cue == nullptr) {
+        return nullptr;
+    }
+
+    const rhythm::TimelineMicroseconds distance = std::llabs(
+        tempo_map.microseconds_from_tick(nearest_cue->hit_tick) - input_time_microseconds);
+    return distance <= k_input_calibration_capture_window_microseconds ? nearest_cue : nullptr;
+}
+
+bool input_calibration_ready(const rhythm::LatencyCalibrationSession& output_calibration) noexcept {
+    return output_calibration.summary().stable;
+}
+
+void process_calibration_input(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    const gameplay::TransportSnapshot& transport_snapshot,
+    const rhythm::TempoMap& tempo_map,
+    std::span<const rhythm::ScheduledCue> scheduled_cues,
+    const platform::InputSnapshot& input_snapshot,
+    const platform::InputBindingsConfig& input_bindings,
+    CalibrationFlowMode& calibration_flow_mode,
+    rhythm::LatencyCalibrationSession& output_calibration,
+    rhythm::LatencyCalibrationSession& input_calibration,
+    rhythm::TimingOffsetProfile& offset_profile,
+    rhythm::TimelineMicroseconds& pending_output_offset_microseconds) {
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "calibration_output_mode")) {
+        calibration_flow_mode = calibration_flow_mode == CalibrationFlowMode::Output
+            ? CalibrationFlowMode::None
+            : CalibrationFlowMode::Output;
+        pending_output_offset_microseconds = offset_profile.audio_output_offset_microseconds;
+        publish_calibration_diagnostic(
+            host,
+            fixed_steps,
+            std::string("cal-mode=") + std::string(to_string(calibration_flow_mode)));
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "calibration_input_mode")) {
+        if (calibration_flow_mode != CalibrationFlowMode::Input &&
+            !input_calibration_ready(output_calibration)) {
+            publish_calibration_diagnostic(
+                host,
+                fixed_steps,
+                "cal-input requires stable output calibration");
+        } else {
+            calibration_flow_mode = calibration_flow_mode == CalibrationFlowMode::Input
+                ? CalibrationFlowMode::None
+                : CalibrationFlowMode::Input;
+            publish_calibration_diagnostic(
+                host,
+                fixed_steps,
+                std::string("cal-mode=") + std::string(to_string(calibration_flow_mode)));
+        }
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "calibration_clear")) {
+        if (calibration_flow_mode == CalibrationFlowMode::Input) {
+            input_calibration.clear();
+            offset_profile.input_response_offset_microseconds = 0;
+            publish_calibration_diagnostic(host, fixed_steps, "cal-input cleared");
+        } else {
+            output_calibration.clear();
+            offset_profile.audio_output_offset_microseconds = 0;
+            pending_output_offset_microseconds = 0;
+            publish_calibration_diagnostic(host, fixed_steps, "cal-output cleared");
+        }
+    }
+
+    if (calibration_flow_mode == CalibrationFlowMode::Output) {
+        if (platform::was_action_pressed(input_snapshot, input_bindings, "calibration_adjust_negative")) {
+            pending_output_offset_microseconds = std::clamp(
+                pending_output_offset_microseconds - k_calibration_adjust_step_microseconds,
+                -k_output_calibration_limit_microseconds,
+                k_output_calibration_limit_microseconds);
+        }
+        if (platform::was_action_pressed(input_snapshot, input_bindings, "calibration_adjust_positive")) {
+            pending_output_offset_microseconds = std::clamp(
+                pending_output_offset_microseconds + k_calibration_adjust_step_microseconds,
+                -k_output_calibration_limit_microseconds,
+                k_output_calibration_limit_microseconds);
+        }
+        if (platform::was_action_pressed(input_snapshot, input_bindings, "calibration_commit")) {
+            (void)record_output_calibration_sample(
+                host,
+                fixed_steps,
+                output_calibration,
+                offset_profile,
+                pending_output_offset_microseconds);
+        }
+        return;
+    }
+
+    if (calibration_flow_mode != CalibrationFlowMode::Input ||
+        !platform::was_action_pressed(input_snapshot, input_bindings, "calibration_commit") ||
+        !tempo_map.valid()) {
+        return;
+    }
+
+    if (!input_calibration_ready(output_calibration)) {
+        publish_calibration_diagnostic(
+            host,
+            fixed_steps,
+            "cal-input requires stable output calibration");
+        return;
+    }
+
+    const rhythm::TimelineMicroseconds input_time_microseconds =
+        static_cast<rhythm::TimelineMicroseconds>(std::llround(transport_snapshot.position_seconds * 1000000.0));
+    const rhythm::ScheduledCue* capture_cue = nearest_capture_cue(scheduled_cues, tempo_map, input_time_microseconds);
+    if (capture_cue == nullptr) {
+        publish_calibration_diagnostic(host, fixed_steps, "cal-input missed capture window");
+        return;
+    }
+
+    (void)record_input_calibration_sample(
+        host,
+        fixed_steps,
+        input_calibration,
+        offset_profile,
+        capture_cue->hit_tick,
+        input_time_microseconds,
+        tempo_map);
+}
+
+void run_demo_calibration_samples(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    const rhythm::TempoMap& tempo_map,
+    rhythm::LatencyCalibrationSession& output_calibration,
+    rhythm::LatencyCalibrationSession& input_calibration,
+    rhythm::TimingOffsetProfile& offset_profile,
+    rhythm::TimelineMicroseconds& pending_output_offset_microseconds) {
+    switch (fixed_steps) {
+    case 5:
+        pending_output_offset_microseconds = 9000;
+        (void)record_output_calibration_sample(
+            host,
+            fixed_steps,
+            output_calibration,
+            offset_profile,
+            pending_output_offset_microseconds);
+        return;
+    case 6:
+        pending_output_offset_microseconds = 10000;
+        (void)record_output_calibration_sample(
+            host,
+            fixed_steps,
+            output_calibration,
+            offset_profile,
+            pending_output_offset_microseconds);
+        return;
+    case 7:
+        pending_output_offset_microseconds = 11000;
+        (void)record_output_calibration_sample(
+            host,
+            fixed_steps,
+            output_calibration,
+            offset_profile,
+            pending_output_offset_microseconds);
+        return;
+    case 8:
+        pending_output_offset_microseconds = 10000;
+        (void)record_output_calibration_sample(
+            host,
+            fixed_steps,
+            output_calibration,
+            offset_profile,
+            pending_output_offset_microseconds);
+        return;
+    case 12:
+        (void)record_input_calibration_sample(
+            host,
+            fixed_steps,
+            input_calibration,
+            offset_profile,
+            240,
+            tempo_map.microseconds_from_tick(240) + 14000,
+            tempo_map);
+        return;
+    case 13:
+        (void)record_input_calibration_sample(
+            host,
+            fixed_steps,
+            input_calibration,
+            offset_profile,
+            480,
+            tempo_map.microseconds_from_tick(480) + 16000,
+            tempo_map);
+        return;
+    case 14:
+        (void)record_input_calibration_sample(
+            host,
+            fixed_steps,
+            input_calibration,
+            offset_profile,
+            720,
+            tempo_map.microseconds_from_tick(720) + 15000,
+            tempo_map);
+        return;
+    case 15:
+        (void)record_input_calibration_sample(
+            host,
+            fixed_steps,
+            input_calibration,
+            offset_profile,
+            1200,
+            tempo_map.microseconds_from_tick(1200) + 15000,
+            tempo_map);
+        return;
+    default:
+        break;
+    }
 }
 
 rhythm::CueTravelWindow make_demo_cue_travel_window() noexcept {
@@ -156,6 +478,34 @@ rhythm::LinearCueTravelPath make_lane_travel_path(std::uint32_t channel_index) n
     };
 }
 
+rhythm::LinearCueTravelPath make_practice_lane_travel_path(
+    std::uint32_t channel_index,
+    double practice_scroll_speed_multiplier) noexcept {
+    return rhythm::scale_linear_cue_travel_path(
+        make_lane_travel_path(channel_index),
+        practice_scroll_speed_multiplier);
+}
+
+float sample_offset_visualization_x(
+    const rhythm::TempoMap& tempo_map,
+    const rhythm::RhythmPosition& current_position,
+    rhythm::TimelineMicroseconds offset_microseconds,
+    std::uint32_t channel_index,
+    double practice_scroll_speed_multiplier) noexcept {
+    const rhythm::ScheduledCue offset_cue{
+        .hit_tick = tempo_map.tick_from_microseconds(current_position.microseconds + offset_microseconds),
+        .channel_index = channel_index,
+    };
+    const rhythm::CueTravelState travel_state = rhythm::sample_cue_travel(
+        tempo_map,
+        current_position.tick,
+        offset_cue,
+        make_demo_cue_travel_window());
+    return rhythm::sample_linear_cue_position_x(
+        travel_state,
+        make_practice_lane_travel_path(channel_index, practice_scroll_speed_multiplier));
+}
+
 render::Color4 scheduled_cue_color(std::uint32_t channel_index, rhythm::CueTravelPhase phase) noexcept {
     const float lane_tint = static_cast<float>(channel_index % 3u) * 0.18f;
     switch (phase) {
@@ -168,6 +518,106 @@ render::Color4 scheduled_cue_color(std::uint32_t channel_index, rhythm::CueTrave
     }
 
     return render::Color4{};
+}
+
+void process_practice_input(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    gameplay::ITransportControl& transport,
+    const platform::InputSnapshot& input_snapshot,
+    const platform::InputBindingsConfig& input_bindings,
+    double& practice_scroll_speed_multiplier,
+    bool& practice_offset_visualization_enabled,
+    double& practice_loop_marker_start_seconds,
+    double& practice_loop_marker_end_seconds,
+    bool& practice_loop_marker_start_set,
+    bool& practice_loop_marker_end_set) {
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_speed_decrease")) {
+        practice_scroll_speed_multiplier = rhythm::clamp_scroll_speed_multiplier(
+            practice_scroll_speed_multiplier - k_practice_scroll_speed_step);
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(2)
+               << "practice scroll=" << practice_scroll_speed_multiplier << 'x';
+        publish_practice_diagnostic(host, fixed_steps, stream.str());
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_speed_increase")) {
+        practice_scroll_speed_multiplier = rhythm::clamp_scroll_speed_multiplier(
+            practice_scroll_speed_multiplier + k_practice_scroll_speed_step);
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(2)
+               << "practice scroll=" << practice_scroll_speed_multiplier << 'x';
+        publish_practice_diagnostic(host, fixed_steps, stream.str());
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_speed_reset")) {
+        practice_scroll_speed_multiplier = 1.0;
+        publish_practice_diagnostic(host, fixed_steps, "practice scroll reset=1.00x");
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_offset_visualization_toggle")) {
+        practice_offset_visualization_enabled = !practice_offset_visualization_enabled;
+        publish_practice_diagnostic(
+            host,
+            fixed_steps,
+            std::string("practice offsets=") + (practice_offset_visualization_enabled ? "shown" : "hidden"));
+    }
+
+    const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_loop_mark_start")) {
+        practice_loop_marker_start_seconds = transport_snapshot.position_seconds;
+        practice_loop_marker_start_set = true;
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(3)
+               << "practice loop-start=" << practice_loop_marker_start_seconds;
+        publish_practice_diagnostic(host, fixed_steps, stream.str());
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_loop_mark_end")) {
+        practice_loop_marker_end_seconds = transport_snapshot.position_seconds;
+        practice_loop_marker_end_set = true;
+        std::ostringstream stream;
+        stream << std::fixed << std::setprecision(3)
+               << "practice loop-end=" << practice_loop_marker_end_seconds;
+        publish_practice_diagnostic(host, fixed_steps, stream.str());
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_loop_apply")) {
+        if (!practice_loop_marker_start_set || !practice_loop_marker_end_set) {
+            publish_practice_diagnostic(host, fixed_steps, "practice loop apply ignored: missing marker");
+        } else {
+            const rhythm::PracticeLoopSegment loop_segment = rhythm::make_practice_loop_segment(
+                practice_loop_marker_start_seconds,
+                practice_loop_marker_end_seconds);
+            if (!loop_segment.enabled) {
+                publish_practice_diagnostic(host, fixed_steps, "practice loop apply ignored: invalid range");
+            } else {
+                transport.set_loop_region(loop_segment.start_seconds, loop_segment.end_seconds);
+                sync_practice_loop_markers_from_transport(
+                    transport.snapshot(),
+                    practice_loop_marker_start_seconds,
+                    practice_loop_marker_end_seconds,
+                    practice_loop_marker_start_set,
+                    practice_loop_marker_end_set);
+                std::ostringstream stream;
+                stream << std::fixed << std::setprecision(3)
+                       << "practice loop=[" << loop_segment.start_seconds << ", "
+                       << loop_segment.end_seconds << ']';
+                publish_practice_diagnostic(host, fixed_steps, stream.str());
+            }
+        }
+    }
+
+    if (platform::was_action_pressed(input_snapshot, input_bindings, "practice_loop_clear")) {
+        transport.clear_loop_region();
+        sync_practice_loop_markers_from_transport(
+            transport.snapshot(),
+            practice_loop_marker_start_seconds,
+            practice_loop_marker_end_seconds,
+            practice_loop_marker_start_set,
+            practice_loop_marker_end_set);
+        publish_practice_diagnostic(host, fixed_steps, "practice loop cleared");
+    }
 }
 
 void refresh_rhythm_debug_state(
@@ -250,7 +700,17 @@ std::uint64_t make_state_hash(
     float average_phase,
     float cue_world_x,
     gameplay::Vector3 tip_world,
-    std::uint64_t collision_signature) noexcept {
+    std::uint64_t collision_signature,
+    rhythm::TimelineMicroseconds audio_output_offset_microseconds,
+    rhythm::TimelineMicroseconds input_response_offset_microseconds,
+    CalibrationFlowMode calibration_flow_mode,
+    rhythm::TimelineMicroseconds pending_output_offset_microseconds,
+    double practice_scroll_speed_multiplier,
+    bool practice_offset_visualization_enabled,
+    double practice_loop_marker_start_seconds,
+    double practice_loop_marker_end_seconds,
+    bool practice_loop_marker_start_set,
+    bool practice_loop_marker_end_set) noexcept {
     std::uint64_t hash = 14695981039346656037ull;
     hash ^= fixed_steps;
     hash *= 1099511628211ull;
@@ -305,6 +765,29 @@ std::uint64_t make_state_hash(
     hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(std::llround(tip_world.z * 1000.0f)));
     hash *= 1099511628211ull;
     hash ^= collision_signature;
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(audio_output_offset_microseconds);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(input_response_offset_microseconds);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(calibration_flow_mode);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(pending_output_offset_microseconds);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(
+        std::llround(practice_scroll_speed_multiplier * 1000000.0)));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(practice_offset_visualization_enabled);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(practice_loop_marker_start_set);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(practice_loop_marker_end_set);
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(
+        std::llround(practice_loop_marker_start_seconds * 1000000.0)));
+    hash *= 1099511628211ull;
+    hash ^= static_cast<std::uint64_t>(static_cast<std::int64_t>(
+        std::llround(practice_loop_marker_end_seconds * 1000000.0)));
     return hash;
 }
 
@@ -375,6 +858,10 @@ struct SandboxModeConfig {
     float velocity_scale{1.0f};
     float hit_window_half_width{32.0f};
     float hit_window_half_height{24.0f};
+    double practice_scroll_speed_multiplier{1.25};
+    bool practice_offset_visualization_enabled{true};
+    double practice_loop_start_seconds{0.75};
+    double practice_loop_end_seconds{1.25};
     std::string cue_material_authoring_id{"reference.sandbox.material.cue"};
     std::string debug_font_authoring_id{"reference.sandbox.font.debug"};
 };
@@ -385,6 +872,15 @@ SandboxModeConfig load_sandbox_mode_config(const gameplay::ModeConfigurationStor
     config.velocity_scale = static_cast<float>(view.get_double("velocity_scale", config.velocity_scale));
     config.hit_window_half_width = static_cast<float>(view.get_double("hit_window_half_width", config.hit_window_half_width));
     config.hit_window_half_height = static_cast<float>(view.get_double("hit_window_half_height", config.hit_window_half_height));
+    config.practice_scroll_speed_multiplier =
+        rhythm::clamp_scroll_speed_multiplier(
+            view.get_double("practice_scroll_speed_multiplier", config.practice_scroll_speed_multiplier));
+    config.practice_offset_visualization_enabled =
+        view.get_bool("practice_offset_visualization_enabled", config.practice_offset_visualization_enabled);
+    config.practice_loop_start_seconds =
+        view.get_double("practice_loop_start_seconds", config.practice_loop_start_seconds);
+    config.practice_loop_end_seconds =
+        view.get_double("practice_loop_end_seconds", config.practice_loop_end_seconds);
     config.cue_material_authoring_id = std::string(
         view.get_string("cue_material_authoring_id", config.cue_material_authoring_id));
     config.debug_font_authoring_id = std::string(
@@ -419,6 +915,53 @@ float sample_average_phase(const gameplay::WorldModel& world) {
         ++count;
     });
     return count > 0 ? total_phase / static_cast<float>(count) : 0.0f;
+}
+
+void publish_practice_diagnostic(
+    gameplay::IModeHost& host,
+    std::uint64_t fixed_steps,
+    std::string message) {
+    host.event_bus().publish(
+        "mode.reference.sandbox",
+        host.frame_timing().frame_index,
+        fixed_steps,
+        gameplay::DiagnosticEvent{
+            .message = std::move(message),
+        });
+}
+
+void sync_practice_loop_markers_from_transport(
+    const gameplay::TransportSnapshot& transport_snapshot,
+    double& practice_loop_marker_start_seconds,
+    double& practice_loop_marker_end_seconds,
+    bool& practice_loop_marker_start_set,
+    bool& practice_loop_marker_end_set) noexcept {
+    if (!transport_snapshot.loop_region.enabled) {
+        practice_loop_marker_start_seconds = 0.0;
+        practice_loop_marker_end_seconds = 0.0;
+        practice_loop_marker_start_set = false;
+        practice_loop_marker_end_set = false;
+        return;
+    }
+
+    practice_loop_marker_start_seconds = transport_snapshot.loop_region.start_seconds;
+    practice_loop_marker_end_seconds = transport_snapshot.loop_region.end_seconds;
+    practice_loop_marker_start_set = true;
+    practice_loop_marker_end_set = true;
+}
+
+void apply_practice_speed_to_world(
+    gameplay::WorldModel& world,
+    float configured_velocity_scale,
+    double practice_scroll_speed_multiplier) {
+    const double clamped_multiplier = rhythm::clamp_scroll_speed_multiplier(practice_scroll_speed_multiplier);
+    world.for_each<gameplay::LinearVelocity2D, SandboxLaneCue>(
+        [&](gameplay::WorldEntity, gameplay::LinearVelocity2D& velocity, const SandboxLaneCue& lane) {
+            const std::size_t lane_index = static_cast<std::size_t>(lane.lane_index % k_lane_velocity_x.size());
+            velocity.units_per_second.x =
+                k_lane_velocity_x[lane_index] * configured_velocity_scale * static_cast<float>(clamped_multiplier);
+            velocity.units_per_second.y = 0.0f;
+        });
 }
 
 std::string sample_first_label(const gameplay::WorldModel& world) {
@@ -586,7 +1129,10 @@ void publish_mode_config_diagnostic(
     const SandboxModeConfig& config) {
     std::ostringstream stream;
     stream << "mode-config speed=" << config.velocity_scale << " hit=" << config.hit_window_half_width << 'x'
-           << config.hit_window_half_height << " cue-id=" << config.cue_material_authoring_id
+           << config.hit_window_half_height << " practice-scroll=" << config.practice_scroll_speed_multiplier
+           << " practice-loop=[" << config.practice_loop_start_seconds << ", "
+           << config.practice_loop_end_seconds << "] offsets="
+           << config.practice_offset_visualization_enabled << " cue-id=" << config.cue_material_authoring_id
            << " font-id=" << config.debug_font_authoring_id;
     host.event_bus().publish(
         "mode.reference.sandbox",
@@ -893,6 +1439,20 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     visual_roll_ = 0;
     configured_transport_pause_binding_ = "keyboard:Space";
     configured_transport_restart_binding_ = "keyboard:R";
+    configured_calibration_output_binding_ = "keyboard:O";
+    configured_calibration_input_binding_ = "keyboard:I";
+    configured_calibration_commit_binding_ = "keyboard:Return";
+    configured_calibration_clear_binding_ = "keyboard:Backspace";
+    configured_calibration_adjust_negative_binding_ = "keyboard:Left";
+    configured_calibration_adjust_positive_binding_ = "keyboard:Right";
+    configured_practice_speed_decrease_binding_ = "keyboard:Z";
+    configured_practice_speed_increase_binding_ = "keyboard:X";
+    configured_practice_speed_reset_binding_ = "keyboard:C";
+    configured_practice_loop_mark_start_binding_ = "keyboard:J";
+    configured_practice_loop_mark_end_binding_ = "keyboard:K";
+    configured_practice_loop_apply_binding_ = "keyboard:L";
+    configured_practice_loop_clear_binding_ = "keyboard:U";
+    configured_practice_offset_visualization_toggle_binding_ = "keyboard:V";
     configured_velocity_scale_ = 1.0f;
     configured_hit_window_half_width_ = 32.0f;
     configured_hit_window_half_height_ = 24.0f;
@@ -934,6 +1494,62 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         host.input_bindings(),
         "transport_restart",
         configured_transport_restart_binding_);
+    configured_calibration_output_binding_ = describe_binding(
+        host.input_bindings(),
+        "calibration_output_mode",
+        configured_calibration_output_binding_);
+    configured_calibration_input_binding_ = describe_binding(
+        host.input_bindings(),
+        "calibration_input_mode",
+        configured_calibration_input_binding_);
+    configured_calibration_commit_binding_ = describe_binding(
+        host.input_bindings(),
+        "calibration_commit",
+        configured_calibration_commit_binding_);
+    configured_calibration_clear_binding_ = describe_binding(
+        host.input_bindings(),
+        "calibration_clear",
+        configured_calibration_clear_binding_);
+    configured_calibration_adjust_negative_binding_ = describe_binding(
+        host.input_bindings(),
+        "calibration_adjust_negative",
+        configured_calibration_adjust_negative_binding_);
+    configured_calibration_adjust_positive_binding_ = describe_binding(
+        host.input_bindings(),
+        "calibration_adjust_positive",
+        configured_calibration_adjust_positive_binding_);
+    configured_practice_speed_decrease_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_speed_decrease",
+        configured_practice_speed_decrease_binding_);
+    configured_practice_speed_increase_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_speed_increase",
+        configured_practice_speed_increase_binding_);
+    configured_practice_speed_reset_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_speed_reset",
+        configured_practice_speed_reset_binding_);
+    configured_practice_loop_mark_start_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_loop_mark_start",
+        configured_practice_loop_mark_start_binding_);
+    configured_practice_loop_mark_end_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_loop_mark_end",
+        configured_practice_loop_mark_end_binding_);
+    configured_practice_loop_apply_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_loop_apply",
+        configured_practice_loop_apply_binding_);
+    configured_practice_loop_clear_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_loop_clear",
+        configured_practice_loop_clear_binding_);
+    configured_practice_offset_visualization_toggle_binding_ = describe_binding(
+        host.input_bindings(),
+        "practice_offset_visualization_toggle",
+        configured_practice_offset_visualization_toggle_binding_);
 
     rhythm_tempo_map_.clear();
     (void)rhythm_tempo_map_.rebuild(make_demo_tempo_map_definition());
@@ -941,6 +1557,16 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
     scheduled_cues_ = make_demo_cue_schedule();
     judgement_window_set_ = rhythm::make_default_timing_window_set();
     judgement_offset_profile_ = make_demo_timing_offsets();
+    practice_scroll_speed_multiplier_ = mode_config.practice_scroll_speed_multiplier;
+    practice_offset_visualization_enabled_ = mode_config.practice_offset_visualization_enabled;
+    practice_loop_marker_start_seconds_ = 0.0;
+    practice_loop_marker_end_seconds_ = 0.0;
+    practice_loop_marker_start_set_ = false;
+    practice_loop_marker_end_set_ = false;
+    calibration_flow_mode_ = CalibrationFlowMode::None;
+    output_latency_calibration_.clear();
+    input_latency_calibration_.clear();
+    pending_output_offset_microseconds_ = judgement_offset_profile_.audio_output_offset_microseconds;
     nearest_judgement_ = {};
     nearest_cue_timing_error_ms_ = 0.0;
     visible_scheduled_cue_count_ = 0;
@@ -964,6 +1590,10 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         configured_velocity_scale_,
         configured_hit_window_half_width_,
         configured_hit_window_half_height_);
+    apply_practice_speed_to_world(
+        host.world_model(),
+        configured_velocity_scale_,
+        practice_scroll_speed_multiplier_);
     propagate_and_refresh(
         propagation_report_,
         collision_report_,
@@ -995,11 +1625,42 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         fixed_steps_,
         configured_transport_pause_binding_,
         configured_transport_restart_binding_);
+    publish_calibration_diagnostic(
+        host,
+        fixed_steps_,
+        "cal-bindings out=" + configured_calibration_output_binding_ +
+            " input=" + configured_calibration_input_binding_ +
+            " sample=" + configured_calibration_commit_binding_ +
+            " clear=" + configured_calibration_clear_binding_ +
+            " adjust=" + configured_calibration_adjust_negative_binding_ + "/" +
+            configured_calibration_adjust_positive_binding_);
+    publish_practice_diagnostic(
+        host,
+        fixed_steps_,
+        "practice-bindings speed=" + configured_practice_speed_decrease_binding_ + "/" +
+            configured_practice_speed_increase_binding_ + "/" + configured_practice_speed_reset_binding_ +
+            " loop=" + configured_practice_loop_mark_start_binding_ + "/" +
+            configured_practice_loop_mark_end_binding_ + "/" + configured_practice_loop_apply_binding_ +
+            " clear=" + configured_practice_loop_clear_binding_ +
+            " vis=" + configured_practice_offset_visualization_toggle_binding_);
 
     gameplay::ITransportControl& transport = host.transport();
     transport.stop();
-    transport.set_loop_region(0.75, 1.25);
+    const rhythm::PracticeLoopSegment practice_loop_segment = rhythm::make_practice_loop_segment(
+        mode_config.practice_loop_start_seconds,
+        mode_config.practice_loop_end_seconds);
+    if (practice_loop_segment.enabled) {
+        transport.set_loop_region(practice_loop_segment.start_seconds, practice_loop_segment.end_seconds);
+    } else {
+        transport.clear_loop_region();
+    }
     transport.play();
+    sync_practice_loop_markers_from_transport(
+        transport.snapshot(),
+        practice_loop_marker_start_seconds_,
+        practice_loop_marker_end_seconds_,
+        practice_loop_marker_start_set_,
+        practice_loop_marker_end_set_);
 
     host.random_service().reset_streams();
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
@@ -1021,7 +1682,17 @@ void ReferenceSandboxMode::on_enter(gameplay::IModeHost& host) {
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
-        collision_signature_);
+        collision_signature_,
+        judgement_offset_profile_.audio_output_offset_microseconds,
+        judgement_offset_profile_.input_response_offset_microseconds,
+        calibration_flow_mode_,
+        pending_output_offset_microseconds_,
+        practice_scroll_speed_multiplier_,
+        practice_offset_visualization_enabled_,
+        practice_loop_marker_start_seconds_,
+        practice_loop_marker_end_seconds_,
+        practice_loop_marker_start_set_,
+        practice_loop_marker_end_set_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
@@ -1081,10 +1752,31 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
         action = "restart";
     }
 
+    if (fixed_steps_ == 8 || fixed_steps_ == 9) {
+        sync_practice_loop_markers_from_transport(
+            transport.snapshot(),
+            practice_loop_marker_start_seconds_,
+            practice_loop_marker_end_seconds_,
+            practice_loop_marker_start_set_,
+            practice_loop_marker_end_set_);
+    }
+
+    apply_practice_speed_to_world(
+        host.world_model(),
+        configured_velocity_scale_,
+        practice_scroll_speed_multiplier_);
     update_world(host.world_model());
     motion_report_ = gameplay::integrate_motion(host.world_model(), fixed_delta_seconds);
 
     const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    run_demo_calibration_samples(
+        host,
+        fixed_steps_,
+        rhythm_tempo_map_,
+        output_latency_calibration_,
+        input_latency_calibration_,
+        judgement_offset_profile_,
+        pending_output_offset_microseconds_);
     refresh_rhythm_debug_state(
         rhythm_tempo_map_,
         scheduled_cues_,
@@ -1122,7 +1814,17 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
-        collision_signature_);
+        collision_signature_,
+        judgement_offset_profile_.audio_output_offset_microseconds,
+        judgement_offset_profile_.input_response_offset_microseconds,
+        calibration_flow_mode_,
+        pending_output_offset_microseconds_,
+        practice_scroll_speed_multiplier_,
+        practice_offset_visualization_enabled_,
+        practice_loop_marker_start_seconds_,
+        practice_loop_marker_end_seconds_,
+        practice_loop_marker_start_set_,
+        practice_loop_marker_end_set_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,
@@ -1140,14 +1842,41 @@ void ReferenceSandboxMode::on_fixed_step(gameplay::IModeHost& host, double fixed
     publish_replay_checkpoint_event(host, "fixed-step", fixed_steps_, checkpoint_hash);
 
     foundation::TelemetrySnapshot snapshot{};
-    snapshot.audio_drift_ms = 0.00;
+    snapshot.audio_drift_ms = host.transport().diagnostics().drift_seconds * 1000.0;
     snapshot.visible_cues = static_cast<std::uint32_t>(std::max<std::size_t>(3u, visible_scheduled_cue_count_));
     snapshot.draw_calls = 0;
     host.telemetry().record(snapshot);
 }
 
 void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) {
-    const gameplay::TransportSnapshot& transport_snapshot = host.transport().snapshot();
+    gameplay::ITransportControl& transport = host.transport();
+    const gameplay::TransportSnapshot& transport_snapshot = transport.snapshot();
+    const platform::InputSnapshot& input_snapshot = host.input_snapshot();
+    process_practice_input(
+        host,
+        fixed_steps_,
+        transport,
+        input_snapshot,
+        host.input_bindings(),
+        practice_scroll_speed_multiplier_,
+        practice_offset_visualization_enabled_,
+        practice_loop_marker_start_seconds_,
+        practice_loop_marker_end_seconds_,
+        practice_loop_marker_start_set_,
+        practice_loop_marker_end_set_);
+    process_calibration_input(
+        host,
+        fixed_steps_,
+        transport_snapshot,
+        rhythm_tempo_map_,
+        scheduled_cues_,
+        input_snapshot,
+        host.input_bindings(),
+        calibration_flow_mode_,
+        output_latency_calibration_,
+        input_latency_calibration_,
+        judgement_offset_profile_,
+        pending_output_offset_microseconds_);
     refresh_rhythm_debug_state(
         rhythm_tempo_map_,
         scheduled_cues_,
@@ -1158,7 +1887,6 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         nearest_judgement_,
         nearest_cue_timing_error_ms_,
         visible_scheduled_cue_count_);
-    const platform::InputSnapshot& input_snapshot = host.input_snapshot();
     const foundation::DeterministicRandomService& random_service = host.random_service();
     const foundation::DeterministicRng* transport_rng = random_service.find_stream("reference-sandbox.transport");
     const foundation::DeterministicRng* visual_rng = random_service.find_stream("reference-sandbox.visual");
@@ -1166,7 +1894,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     const gameplay::EventRecord* last_event = event_bus.last();
     const gameplay::ReplayRecorder& replay_recorder = host.replay();
     const gameplay::ReplayCheckpoint* last_checkpoint = replay_recorder.last_checkpoint();
-    const gameplay::TransportDiagnostics& transport_diagnostics = host.transport().diagnostics();
+    const gameplay::TransportDiagnostics& transport_diagnostics = transport.diagnostics();
 
     host.render_extraction().set_view_camera(
         reaktio::render::RenderView::MainScene,
@@ -1234,6 +1962,72 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     }
     host.render_extraction().add_debug_text(0, 11, 0x08, correction_stream.str());
 
+    const rhythm::LatencyCalibrationSummary& output_calibration_summary = output_latency_calibration_.summary();
+    const rhythm::LatencyCalibrationSummary& input_calibration_summary = input_latency_calibration_.summary();
+    const rhythm::PracticeOffsetSummary practice_offset_summary =
+        rhythm::summarize_practice_offsets(judgement_offset_profile_);
+    std::ostringstream calibration_stream;
+    calibration_stream << std::fixed << std::setprecision(1)
+                       << "cal mode=" << to_string(calibration_flow_mode_)
+                       << " out-ms=" << static_cast<double>(output_calibration_summary.recommended_offset_microseconds) / 1000.0
+                       << "(" << output_calibration_summary.sample_count << (output_calibration_summary.stable ? '*' : '-') << ")"
+                       << " in-ms=" << static_cast<double>(input_calibration_summary.recommended_offset_microseconds) / 1000.0
+                       << "(" << input_calibration_summary.sample_count << (input_calibration_summary.stable ? '*' : '-') << ")"
+                       << " pending-ms=" << static_cast<double>(pending_output_offset_microseconds_) / 1000.0;
+    host.render_extraction().add_debug_text(0, 12, calibration_attribute(calibration_flow_mode_), calibration_stream.str());
+
+    std::ostringstream calibration_controls_stream;
+    calibration_controls_stream << "cal keys out=" << configured_calibration_output_binding_
+                                << " in=" << configured_calibration_input_binding_
+                                << " sample=" << configured_calibration_commit_binding_
+                                << " clear=" << configured_calibration_clear_binding_
+                                << " adjust=" << configured_calibration_adjust_negative_binding_ << '/'
+                                << configured_calibration_adjust_positive_binding_;
+    host.render_extraction().add_debug_text(0, 13, 0x08, calibration_controls_stream.str());
+
+    std::ostringstream practice_stream;
+    practice_stream << std::fixed << std::setprecision(2)
+                    << "practice scroll=" << practice_scroll_speed_multiplier_ << 'x'
+                    << " loop=";
+    if (transport_snapshot.loop_region.enabled) {
+        practice_stream << '[' << transport_snapshot.loop_region.start_seconds << ", "
+                        << transport_snapshot.loop_region.end_seconds << ']';
+    } else {
+        practice_stream << "none";
+    }
+    practice_stream << " edit=";
+    if (practice_loop_marker_start_set_ || practice_loop_marker_end_set_) {
+        practice_stream << '[';
+        if (practice_loop_marker_start_set_) {
+            practice_stream << practice_loop_marker_start_seconds_;
+        } else {
+            practice_stream << '?';
+        }
+        practice_stream << ", ";
+        if (practice_loop_marker_end_set_) {
+            practice_stream << practice_loop_marker_end_seconds_;
+        } else {
+            practice_stream << '?';
+        }
+        practice_stream << ']';
+    } else {
+        practice_stream << "none";
+    }
+    practice_stream << " offsets=" << practice_offset_visualization_enabled_
+                    << " total-ms=" << static_cast<double>(practice_offset_summary.total_offset_microseconds) / 1000.0;
+    host.render_extraction().add_debug_text(0, 14, 0x0b, practice_stream.str());
+
+    std::ostringstream practice_controls_stream;
+    practice_controls_stream << "practice keys speed=" << configured_practice_speed_decrease_binding_ << '/'
+                             << configured_practice_speed_increase_binding_ << '/'
+                             << configured_practice_speed_reset_binding_ << " loop="
+                             << configured_practice_loop_mark_start_binding_ << '/'
+                             << configured_practice_loop_mark_end_binding_ << '/'
+                             << configured_practice_loop_apply_binding_ << " clear="
+                             << configured_practice_loop_clear_binding_ << " vis="
+                             << configured_practice_offset_visualization_toggle_binding_;
+    host.render_extraction().add_debug_text(0, 15, 0x08, practice_controls_stream.str());
+
     std::ostringstream rhythm_stream;
     if (rhythm_tempo_map_.valid()) {
         rhythm_stream << std::fixed << std::setprecision(1);
@@ -1246,7 +2040,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
     } else {
         rhythm_stream << rhythm_status_;
     }
-    host.render_extraction().add_debug_text(0, 12, 0x0d, rhythm_stream.str());
+    host.render_extraction().add_debug_text(0, 16, 0x0d, rhythm_stream.str());
 
     std::ostringstream judgement_stream;
     judgement_stream << std::fixed << std::setprecision(1)
@@ -1256,7 +2050,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                      << " offset-ms=" << static_cast<double>(nearest_judgement_.applied_offset_microseconds) / 1000.0
                      << " hit=" << nearest_judgement_.scoreable_hit
                      << " combo=" << nearest_judgement_.advances_combo;
-    host.render_extraction().add_debug_text(0, 13, judgement_attribute(nearest_judgement_.judgement), judgement_stream.str());
+    host.render_extraction().add_debug_text(0, 17, judgement_attribute(nearest_judgement_.judgement), judgement_stream.str());
 
     std::array<rhythm::ScheduledCue, 4> upcoming_cues{};
     const std::size_t upcoming_count = rhythm::collect_upcoming_cues(
@@ -1283,7 +2077,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         } else {
             upcoming_stream << "up[" << index << "] none";
         }
-        host.render_extraction().add_debug_text(0, static_cast<std::uint16_t>(14 + index), 0x09, upcoming_stream.str());
+        host.render_extraction().add_debug_text(0, static_cast<std::uint16_t>(18 + index), 0x09, upcoming_stream.str());
     }
 
     std::ostringstream input_stream;
@@ -1291,7 +2085,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                  << input_snapshot.mouse_button_events().size() << " text="
                  << input_snapshot.text_input_events().size() << " gamepads="
                  << input_snapshot.connected_gamepads().size();
-    host.render_extraction().add_debug_text(0, 18, 0x0a, input_stream.str());
+    host.render_extraction().add_debug_text(0, 22, 0x0a, input_stream.str());
 
     std::ostringstream rng_stream;
     rng_stream << "rng root=0x" << std::hex << random_service.root_seed() << std::dec
@@ -1299,24 +2093,24 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                << transport_roll_ << " visual-roll=" << visual_roll_ << " draws="
                << (transport_rng != nullptr ? transport_rng->generated_values() : 0) << '/'
                << (visual_rng != nullptr ? visual_rng->generated_values() : 0);
-    host.render_extraction().add_debug_text(0, 19, 0x0d, rng_stream.str());
+    host.render_extraction().add_debug_text(0, 23, 0x0d, rng_stream.str());
 
     std::ostringstream replay_stream;
     replay_stream << "replay inputs=" << replay_recorder.input_frame_count() << " checkpoints="
                   << replay_recorder.checkpoint_count() << " last="
                   << (last_checkpoint != nullptr ? last_checkpoint->label : std::string_view("none"));
-    host.render_extraction().add_debug_text(0, 20, 0x0c, replay_stream.str());
+    host.render_extraction().add_debug_text(0, 24, 0x0c, replay_stream.str());
 
     std::ostringstream event_stream;
     event_stream << "events=" << event_bus.published_count() << '/' << event_bus.count() << " last="
                  << (last_event != nullptr ? gameplay::describe_event(*last_event) : std::string("none"));
-    host.render_extraction().add_debug_text(0, 21, 0x0b, event_stream.str());
+    host.render_extraction().add_debug_text(0, 25, 0x0b, event_stream.str());
 
     std::ostringstream world_stream;
     world_stream << "world entities=" << world_entity_count_ << " phase=" << average_phase_
                  << " sample=" << sample_first_label(host.world_model()) << " x=" << sample_cue_world_x_
                  << " tip-z=" << sample_tip_world_.z;
-    host.render_extraction().add_debug_text(0, 22, 0x0f, world_stream.str());
+    host.render_extraction().add_debug_text(0, 26, 0x0f, world_stream.str());
 
     std::ostringstream transform_stream;
     transform_stream << "propagate 2d=" << propagation_report_.propagated_2d << " 3d="
@@ -1324,7 +2118,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                      << (propagation_report_.detached_2d + propagation_report_.detached_3d) << " stale="
                      << (propagation_report_.stale_world_transforms_2d + propagation_report_.stale_world_transforms_3d)
                      << " cycles=" << (propagation_report_.cycle_breaks_2d + propagation_report_.cycle_breaks_3d);
-    host.render_extraction().add_debug_text(0, 23, 0x0e, transform_stream.str());
+    host.render_extraction().add_debug_text(0, 27, 0x0e, transform_stream.str());
 
     std::ostringstream motion_stream;
     motion_stream << "motion l2=" << motion_report_.linear_2d << " a2=" << motion_report_.angular_2d
@@ -1334,7 +2128,7 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         motion_stream << " first=" << gameplay::to_string(collision_report_.contacts.front().shape_pair)
                       << " pen=" << collision_report_.contacts.front().penetration;
     }
-    host.render_extraction().add_debug_text(0, 24, 0x0d, motion_stream.str());
+    host.render_extraction().add_debug_text(0, 28, 0x0d, motion_stream.str());
 
     std::ostringstream resource_stream;
     resource_stream << "resources count=" << resource_summary_.resource_count << " rev=" << resource_summary_.revision
@@ -1353,19 +2147,19 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
                     << " mesh-h=" << rig_mesh_handle_.value() << '/' << rig_mesh_runtime_label_
                     << " debug=" << debug_font_handle_.value() << '/' << debug_font_runtime_label_
                     << " stale=" << stale_debug_font_borrow_valid_;
-    host.render_extraction().add_debug_text(0, 25, 0x0c, resource_stream.str());
+    host.render_extraction().add_debug_text(0, 29, 0x0c, resource_stream.str());
 
     std::ostringstream config_stream;
     config_stream << "cfg speed=" << configured_velocity_scale_ << " hit=" << configured_hit_window_half_width_
                   << 'x' << configured_hit_window_half_height_ << " cue-id="
                   << configured_cue_material_authoring_id_ << " font-id="
                   << configured_debug_font_authoring_id_;
-    host.render_extraction().add_debug_text(0, 26, 0x0b, config_stream.str());
+    host.render_extraction().add_debug_text(0, 30, 0x0b, config_stream.str());
 
     std::ostringstream binding_stream;
     binding_stream << "bindings pause=" << configured_transport_pause_binding_
                    << " restart=" << configured_transport_restart_binding_;
-    host.render_extraction().add_debug_text(0, 27, 0x0a, binding_stream.str());
+    host.render_extraction().add_debug_text(0, 31, 0x0a, binding_stream.str());
 
     // Exercise the new render paths: sprites for cue positions, debug shapes for hit windows,
     // and lines for lane baselines.
@@ -1392,7 +2186,8 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         const float lane_center_y = k_lane_center_y[lane];
         const float timing_line_x = k_lane_root_x[lane];
         const float lane_velocity_x = k_lane_velocity_x[lane] * configured_velocity_scale_;
-        const float spawn_offset = lane_velocity_x >= 0.0f ? -180.0f : 180.0f;
+        const float spawn_offset = (lane_velocity_x >= 0.0f ? -180.0f : 180.0f) *
+            static_cast<float>(rhythm::clamp_scroll_speed_multiplier(practice_scroll_speed_multiplier_));
         lane_visualizations[lane] = gameplay::CueLaneDebugVisualization{
             .lane_start_x = -400.0f,
             .lane_end_x = 400.0f,
@@ -1407,6 +2202,34 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         };
     }
     gameplay::emit_cue_lane_debug_visualizations(host.render_extraction(), lane_visualizations);
+
+    if (practice_offset_visualization_enabled_ && rhythm_tempo_map_.valid()) {
+        const auto add_offset_marker = [&](rhythm::TimelineMicroseconds offset_microseconds, render::Color4 color) {
+            if (std::llabs(offset_microseconds) <= 100) {
+                return;
+            }
+
+            for (std::size_t lane = 0; lane < k_lane_center_y.size(); ++lane) {
+                const float marker_x = sample_offset_visualization_x(
+                    rhythm_tempo_map_,
+                    rhythm_position_,
+                    offset_microseconds,
+                    static_cast<std::uint32_t>(lane),
+                    practice_scroll_speed_multiplier_);
+                host.render_extraction().add_line(render::LineCommand{
+                    .view = render::RenderView::MainScene,
+                    .start = {marker_x, k_lane_center_y[lane] - (configured_hit_window_half_height_ + 24.0f)},
+                    .end = {marker_x, k_lane_center_y[lane] + (configured_hit_window_half_height_ + 24.0f)},
+                    .color = color,
+                });
+            }
+        };
+
+        add_offset_marker(practice_offset_summary.audio_output_offset_microseconds, {0.30f, 0.85f, 1.00f, 0.70f});
+        add_offset_marker(practice_offset_summary.input_response_offset_microseconds, {1.00f, 0.88f, 0.30f, 0.70f});
+        add_offset_marker(practice_offset_summary.manual_global_offset_microseconds, {1.00f, 0.45f, 0.85f, 0.70f});
+        add_offset_marker(practice_offset_summary.total_offset_microseconds, {1.00f, 1.00f, 1.00f, 0.90f});
+    }
 
     render::InstancedQuadBatchCommand scheduled_cue_batch{
         .view = render::RenderView::MainScene,
@@ -1425,7 +2248,11 @@ void ReferenceSandboxMode::on_render_extract(gameplay::IModeHost& host, double i
         const std::size_t lane = static_cast<std::size_t>(scheduled_cue.channel_index % k_lane_center_y.size());
         scheduled_cue_batch.quads.push_back(render::InstancedQuadInstance{
             .position = {
-                rhythm::sample_linear_cue_position_x(travel_state, make_lane_travel_path(scheduled_cue.channel_index)),
+                rhythm::sample_linear_cue_position_x(
+                    travel_state,
+                    make_practice_lane_travel_path(
+                        scheduled_cue.channel_index,
+                        practice_scroll_speed_multiplier_)),
                 k_lane_center_y[lane] - 46.0f,
             },
             .size = {20.0f, 20.0f},
@@ -1542,7 +2369,17 @@ void ReferenceSandboxMode::on_exit(gameplay::IModeHost& host) {
         average_phase_,
         sample_cue_world_x_,
         sample_tip_world_,
-        collision_signature_);
+        collision_signature_,
+        judgement_offset_profile_.audio_output_offset_microseconds,
+        judgement_offset_profile_.input_response_offset_microseconds,
+        calibration_flow_mode_,
+        pending_output_offset_microseconds_,
+        practice_scroll_speed_multiplier_,
+        practice_offset_visualization_enabled_,
+        practice_loop_marker_start_seconds_,
+        practice_loop_marker_end_seconds_,
+        practice_loop_marker_start_set_,
+        practice_loop_marker_end_set_);
     host.replay().record_checkpoint(gameplay::ReplayCheckpoint{
         .frame_index = host.frame_timing().frame_index,
         .simulation_step = fixed_steps_,

@@ -416,10 +416,28 @@ RuntimeConfiguration make_default_runtime_configuration() {
     configuration.input_bindings.set_action_binding("request_quit", "keyboard:Escape");
     configuration.input_bindings.set_action_binding("transport_pause", "keyboard:Space");
     configuration.input_bindings.set_action_binding("transport_restart", "keyboard:R");
+    configuration.input_bindings.set_action_binding("calibration_output_mode", "keyboard:O");
+    configuration.input_bindings.set_action_binding("calibration_input_mode", "keyboard:I");
+    configuration.input_bindings.set_action_binding("calibration_commit", "keyboard:Return");
+    configuration.input_bindings.set_action_binding("calibration_clear", "keyboard:Backspace");
+    configuration.input_bindings.set_action_binding("calibration_adjust_negative", "keyboard:Left");
+    configuration.input_bindings.set_action_binding("calibration_adjust_positive", "keyboard:Right");
+    configuration.input_bindings.set_action_binding("practice_speed_decrease", "keyboard:Z");
+    configuration.input_bindings.set_action_binding("practice_speed_increase", "keyboard:X");
+    configuration.input_bindings.set_action_binding("practice_speed_reset", "keyboard:C");
+    configuration.input_bindings.set_action_binding("practice_loop_mark_start", "keyboard:J");
+    configuration.input_bindings.set_action_binding("practice_loop_mark_end", "keyboard:K");
+    configuration.input_bindings.set_action_binding("practice_loop_apply", "keyboard:L");
+    configuration.input_bindings.set_action_binding("practice_loop_clear", "keyboard:U");
+    configuration.input_bindings.set_action_binding("practice_offset_visualization_toggle", "keyboard:V");
 
     configuration.mode_configuration.set("mode.reference.sandbox", "velocity_scale", "1.0");
     configuration.mode_configuration.set("mode.reference.sandbox", "hit_window_half_width", "32.0");
     configuration.mode_configuration.set("mode.reference.sandbox", "hit_window_half_height", "24.0");
+    configuration.mode_configuration.set("mode.reference.sandbox", "practice_scroll_speed_multiplier", "1.25");
+    configuration.mode_configuration.set("mode.reference.sandbox", "practice_offset_visualization_enabled", "true");
+    configuration.mode_configuration.set("mode.reference.sandbox", "practice_loop_start_seconds", "0.75");
+    configuration.mode_configuration.set("mode.reference.sandbox", "practice_loop_end_seconds", "1.25");
     configuration.mode_configuration.set(
         "mode.reference.sandbox",
         "cue_material_authoring_id",

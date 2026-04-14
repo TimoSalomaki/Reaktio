@@ -67,6 +67,8 @@ reaktio_configure_target(reaktio_foundation)
 
 add_library(reaktio_rhythm STATIC
     engine/rhythm/src/CueTravelModel.cpp
+    engine/rhythm/src/LatencyCalibration.cpp
+    engine/rhythm/src/PracticeMode.cpp
     engine/rhythm/src/TempoMap.cpp
     engine/rhythm/src/TimingJudgement.cpp
 )
@@ -110,6 +112,7 @@ reaktio_configure_target(reaktio_gameplay)
 
 add_library(reaktio_platform STATIC
     engine/platform/src/FrameClock.cpp
+    engine/platform/src/InputBindingQueries.cpp
     engine/platform/src/InputSnapshot.cpp
     engine/platform/src/SdlAudioDevice.cpp
     engine/platform/src/SdlApplicationShell.cpp
@@ -169,6 +172,7 @@ target_link_libraries(
     PUBLIC
         Reaktio::foundation
         Reaktio::gameplay
+    Reaktio::platform
         Reaktio::platform_api
         Reaktio::rhythm
         Reaktio::render_api
