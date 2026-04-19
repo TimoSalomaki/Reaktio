@@ -206,9 +206,22 @@ int SmokeApplication::run() {
             .phase = gameplay::ModeLifecyclePhase::Entered,
         });
 
+    bool render_validation_logged = false;
     while (!platform_shell.should_quit()) {
         platform_shell.begin_frame();
         render_subsystem.begin_frame(platform_shell.window_state());
+        if (!render_validation_logged && dependencies_.application_config.debug.enable_startup_diagnostics) {
+            const render::RenderStats& render_stats = render_subsystem.stats();
+            std::ostringstream render_validation_stream;
+            render_validation_stream << "  render validation: renderer=" << render_stats.renderer_name
+                                     << " backbuffer=" << render_stats.backbuffer_width << 'x'
+                                     << render_stats.backbuffer_height
+                                     << " headless-fallback=" << render_stats.using_headless_fallback
+                                     << " post-enabled=" << render_stats.post_process_enabled
+                                     << " post-passes=" << render_stats.post_process_pass_count;
+            crash_safe_log_.write(foundation::LogLevel::Info, render_validation_stream.str());
+            render_validation_logged = true;
+        }
         render_extraction_context_.begin_frame();
         const auto frame_start = std::chrono::steady_clock::now();
         const std::size_t telemetry_count_before_frame = telemetry_recorder_.size();

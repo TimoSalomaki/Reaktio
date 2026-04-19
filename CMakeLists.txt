@@ -25,6 +25,69 @@ include(ReaktioDependencies)
 include(ReaktioDevTargets)
 
 reaktio_configure_dependencies()
+include(${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/cmake/bgfxToolUtils.cmake)
+
+if(MSVC)
+    foreach(reaktio_bgfx_tool_target
+        fcpp
+        glsl-optimizer
+        glslang
+        shaderc
+        spirv-cross
+        spirv-opt
+        tint
+        webgpu
+    )
+        if(TARGET ${reaktio_bgfx_tool_target})
+            get_target_property(reaktio_bgfx_tool_target_type ${reaktio_bgfx_tool_target} TYPE)
+            if(NOT reaktio_bgfx_tool_target_type STREQUAL "INTERFACE_LIBRARY")
+                target_compile_options(${reaktio_bgfx_tool_target} PRIVATE /FS)
+            endif()
+        endif()
+    endforeach()
+
+    if(TARGET spirv-opt)
+        set_property(TARGET spirv-opt PROPERTY MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+    endif()
+endif()
+
+set(REAKTIO_GENERATED_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
+set(REAKTIO_POST_PROCESS_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/shaders")
+set(REAKTIO_BGFX_SHADER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/bgfx/src")
+
+bgfx_compile_shaders(
+    TYPE VERTEX
+    SHADERS ${REAKTIO_POST_PROCESS_SHADER_DIR}/vs_post_fullscreen.sc
+    VARYING_DEF ${REAKTIO_POST_PROCESS_SHADER_DIR}/varying.def.sc
+    OUTPUT_DIR ${REAKTIO_GENERATED_SHADER_DIR}
+    OUT_FILES_VAR REAKTIO_POST_PROCESS_VERTEX_HEADERS
+    INCLUDE_DIRS ${REAKTIO_BGFX_SHADER_INCLUDE_DIR}
+    AS_HEADERS
+)
+
+bgfx_compile_shaders(
+    TYPE FRAGMENT
+    SHADERS
+        ${REAKTIO_POST_PROCESS_SHADER_DIR}/fs_post_bloom_extract.sc
+        ${REAKTIO_POST_PROCESS_SHADER_DIR}/fs_post_blur.sc
+        ${REAKTIO_POST_PROCESS_SHADER_DIR}/fs_post_composite.sc
+        ${REAKTIO_POST_PROCESS_SHADER_DIR}/fs_post_copy.sc
+    VARYING_DEF ${REAKTIO_POST_PROCESS_SHADER_DIR}/varying.def.sc
+    OUTPUT_DIR ${REAKTIO_GENERATED_SHADER_DIR}
+    OUT_FILES_VAR REAKTIO_POST_PROCESS_FRAGMENT_HEADERS
+    INCLUDE_DIRS ${REAKTIO_BGFX_SHADER_INCLUDE_DIR}
+    AS_HEADERS
+)
+
+set(REAKTIO_POST_PROCESS_SHADER_HEADERS
+    ${REAKTIO_POST_PROCESS_VERTEX_HEADERS}
+    ${REAKTIO_POST_PROCESS_FRAGMENT_HEADERS}
+)
+
+add_custom_target(
+    reaktio_render_postprocess_shaders
+    DEPENDS ${REAKTIO_POST_PROCESS_SHADER_HEADERS}
+)
 
 function(reaktio_configure_target target_name)
     target_compile_features(${target_name} PUBLIC cxx_std_20)
@@ -130,21 +193,30 @@ add_library(reaktio_render STATIC
     engine/render/src/CookedAssetLibrary.cpp
     engine/render/src/InstanceBufferAllocator.cpp
     engine/render/src/MaterialRegistry.cpp
+    engine/render/src/PostProcessChain.cpp
     engine/render/src/RenderCamera.cpp
     engine/render/src/RenderExtraction.cpp
     engine/render/src/RenderSubsystem.cpp
     engine/render/src/ShaderProgramRegistry.cpp
     engine/render/src/TransientBufferAllocator.cpp
     engine/render/src/UniformRegistry.cpp
+    engine/render/shaders/varying.def.sc
+    engine/render/shaders/vs_post_fullscreen.sc
+    engine/render/shaders/fs_post_bloom_extract.sc
+    engine/render/shaders/fs_post_blur.sc
+    engine/render/shaders/fs_post_composite.sc
+    engine/render/shaders/fs_post_copy.sc
 )
 add_library(Reaktio::render ALIAS reaktio_render)
 target_include_directories(reaktio_render
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/include"
     PRIVATE
+        "${REAKTIO_GENERATED_SHADER_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/bx/include"
 )
 target_link_libraries(reaktio_render PUBLIC Reaktio::foundation Reaktio::platform Reaktio::render_api bgfx)
+add_dependencies(reaktio_render reaktio_render_postprocess_shaders)
 reaktio_configure_target(reaktio_render)
 
 add_library(reaktio_starter_mode STATIC

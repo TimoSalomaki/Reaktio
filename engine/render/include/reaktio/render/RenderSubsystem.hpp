@@ -26,9 +26,11 @@ struct RenderFramePackets;
 struct RenderStats {
     bool initialized{false};
     bool using_headless_fallback{false};
+  bool post_process_enabled{false};
     std::uint16_t backbuffer_width{};
     std::uint16_t backbuffer_height{};
     std::uint16_t view_count{};
+  std::uint16_t post_process_pass_count{};
     std::uint32_t draw_calls{};
     std::uint32_t compute_calls{};
     std::uint32_t blit_calls{};

@@ -1,5 +1,6 @@
 #include "reaktio/render/CookedAssetLibrary.hpp"
 #include "reaktio/render/InstanceBufferAllocator.hpp"
+#include "PostProcessChain.hpp"
 #include "reaktio/render/RenderCamera.hpp"
 #include "reaktio/render/RenderExtraction.hpp"
 #include "reaktio/render/RenderSubsystem.hpp"
@@ -405,7 +406,8 @@ std::uint16_t clamp_dimension(int dimension) noexcept {
 struct RenderSubsystem::Impl {
     Impl(const platform::ApplicationConfig& app_config, foundation::CrashSafeLog& sink)
         : config(app_config),
-          log(&sink) {}
+                    log(&sink),
+                    post_process(app_config.post_process, sink) {}
 
     ~Impl() {
         shutdown();
@@ -461,6 +463,7 @@ struct RenderSubsystem::Impl {
             bgfx::reset(backbuffer_width, backbuffer_height, reset_flags);
         }
 
+        post_process.begin_frame(backbuffer_width, backbuffer_height);
         configure_views();
         apply_camera_command(ViewCameraCommand{
             .view = RenderView::MainScene,
@@ -476,6 +479,8 @@ struct RenderSubsystem::Impl {
         stats.instanced_instances = 0;
         stats.instancing_fallback_batches = 0;
         stats.instance_failed_allocations = 0;
+        stats.post_process_enabled = post_process.active();
+        stats.post_process_pass_count = post_process.pass_count();
     }
 
     bool load_cooked_assets(foundation::ResourceRegistry& resource_registry) {
@@ -643,6 +648,14 @@ struct RenderSubsystem::Impl {
                 stats.loaded_meshes,
                 stats.loaded_fonts,
                 stats.loaded_asset_bytes);
+
+            bgfx::dbgTextPrintf(
+                0,
+                10,
+                0x0f,
+                "post enabled=%u passes=%u",
+                stats.post_process_enabled ? 1u : 0u,
+                stats.post_process_pass_count);
     }
 
     void end_frame() {
@@ -650,12 +663,14 @@ struct RenderSubsystem::Impl {
             return;
         }
 
+        post_process.submit();
         bgfx::frame();
         refresh_stats();
     }
 
     void shutdown() noexcept {
         if (stats.initialized) {
+                post_process.shutdown();
             instance_buffers.shutdown();
             bgfx::shutdown();
             stats = RenderStats{};
@@ -697,19 +712,29 @@ struct RenderSubsystem::Impl {
         transient_buffers.set_vertex_budget(65536u);
         instance_buffers.set_instance_budget(4096u);
         (void)instance_buffers.initialize();
+        if (!post_process.initialize()) {
+            log->write(
+                foundation::LogLevel::Warning,
+                "Renderer post-process chain could not initialize; continuing without fullscreen post-processing.");
+        }
         configure_views();
         refresh_stats();
     }
 
     void configure_views() const {
+        bgfx::setViewName(to_view_id(RenderView::MainScene), "MainScene");
         bgfx::setViewRect(to_view_id(RenderView::MainScene), 0, 0, backbuffer_width, backbuffer_height);
+        bgfx::setViewFrameBuffer(to_view_id(RenderView::MainScene), post_process.scene_frame_buffer());
         bgfx::setViewClear(
             to_view_id(RenderView::MainScene),
             BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
             0x101820ff,
             1.0f,
             0);
+        post_process.configure_views();
+        bgfx::setViewName(to_view_id(RenderView::DebugOverlay), "DebugOverlay");
         bgfx::setViewRect(to_view_id(RenderView::DebugOverlay), 0, 0, backbuffer_width, backbuffer_height);
+        bgfx::setViewFrameBuffer(to_view_id(RenderView::DebugOverlay), BGFX_INVALID_HANDLE);
         bgfx::setViewClear(to_view_id(RenderView::DebugOverlay), BGFX_CLEAR_NONE, 0x00000000, 1.0f, 0);
     }
 
@@ -728,6 +753,8 @@ struct RenderSubsystem::Impl {
         stats.backbuffer_height = backbuffer_height;
         stats.reset_flags = reset_flags;
         stats.view_count = to_view_id(RenderView::Count);
+        stats.post_process_enabled = post_process.active();
+        stats.post_process_pass_count = post_process.pass_count();
         stats.draw_calls = 0;
         stats.compute_calls = 0;
         stats.blit_calls = 0;
@@ -773,6 +800,7 @@ struct RenderSubsystem::Impl {
     foundation::CrashSafeLog* log;
     RenderStats stats;
     CookedAssetLibrary cooked_assets;
+    PostProcessChain post_process;
     std::string cooked_asset_source_storage{"<none>"};
     TransientBufferAllocator transient_buffers;
     InstanceBufferAllocator instance_buffers;

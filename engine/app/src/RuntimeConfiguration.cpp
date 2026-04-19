@@ -635,6 +635,145 @@ RuntimeConfigurationLoadResult load_runtime_configuration() {
             {"enable_startup_diagnostics", "enable_debug_overlay", "enable_input_diagnostics", "enable_gpu_debug"});
     });
 
+    process_known_section("post_process", [&](const SectionValues& values) {
+        load_typed_value(result, sections, "post_process", "enabled", "post-process enabled flag", result.configuration.application_config.post_process.enabled, try_parse_bool);
+        load_typed_value(result, sections, "post_process", "bloom_threshold", "bloom threshold", result.configuration.application_config.post_process.bloom_threshold, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted)) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return parsed >= 0.0f && parsed <= 1.0f;
+        });
+        load_typed_value(result, sections, "post_process", "bloom_intensity", "bloom intensity", result.configuration.application_config.post_process.bloom_intensity, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "bloom_blur_scale", "bloom blur scale", result.configuration.application_config.post_process.bloom_blur_scale, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted <= 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "exposure", "post-process exposure", result.configuration.application_config.post_process.exposure, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "saturation", "post-process saturation", result.configuration.application_config.post_process.saturation, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "contrast", "post-process contrast", result.configuration.application_config.post_process.contrast, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "vignette_intensity", "vignette intensity", result.configuration.application_config.post_process.vignette_intensity, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0 || converted > 1.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "feedback_mix", "feedback mix", result.configuration.application_config.post_process.feedback_mix, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0 || converted > 1.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "feedback_decay", "feedback decay", result.configuration.application_config.post_process.feedback_decay, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0 || converted > 1.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "feedback_scale", "feedback scale", result.configuration.application_config.post_process.feedback_scale, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted <= 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "color_grade_r", "red color-grade multiplier", result.configuration.application_config.post_process.color_grade_r, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "color_grade_g", "green color-grade multiplier", result.configuration.application_config.post_process.color_grade_g, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        load_typed_value(result, sections, "post_process", "color_grade_b", "blue color-grade multiplier", result.configuration.application_config.post_process.color_grade_b, [](std::string_view value, float& parsed) {
+            double converted = static_cast<double>(parsed);
+            if (!try_parse_double(value, converted) || converted < 0.0) {
+                return false;
+            }
+
+            parsed = static_cast<float>(converted);
+            return true;
+        });
+        warn_unknown_keys(
+            result,
+            "post_process",
+            values,
+            {"enabled",
+                "bloom_threshold",
+                "bloom_intensity",
+                "bloom_blur_scale",
+                "exposure",
+                "saturation",
+                "contrast",
+                "vignette_intensity",
+                "feedback_mix",
+                "feedback_decay",
+                "feedback_scale",
+                "color_grade_r",
+                "color_grade_g",
+                "color_grade_b"});
+    });
+
     process_known_section("budget", [&](const SectionValues& values) {
         load_typed_value(result, sections, "budget", "target_frame_ms", "target frame budget", result.configuration.runtime_budget.target_frame_ms, try_parse_double);
         load_typed_value(result, sections, "budget", "simulation_budget_ms", "simulation budget", result.configuration.runtime_budget.simulation_budget_ms, try_parse_double);

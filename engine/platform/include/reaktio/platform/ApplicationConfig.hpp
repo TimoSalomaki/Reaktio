@@ -66,6 +66,23 @@ struct DebugOptions {
     bool enable_gpu_debug{false};
 };
 
+struct PostProcessConfig {
+    bool enabled{false};
+    float bloom_threshold{0.72f};
+    float bloom_intensity{0.35f};
+    float bloom_blur_scale{1.0f};
+    float exposure{1.0f};
+    float saturation{1.04f};
+    float contrast{1.05f};
+    float vignette_intensity{0.18f};
+    float feedback_mix{0.08f};
+    float feedback_decay{0.96f};
+    float feedback_scale{1.004f};
+    float color_grade_r{1.03f};
+    float color_grade_g{1.00f};
+    float color_grade_b{0.97f};
+};
+
 struct ApplicationConfig {
     WindowConfig window;
     MainLoopConfig main_loop;
@@ -73,6 +90,7 @@ struct ApplicationConfig {
     RendererBackendPreference renderer_backend{RendererBackendPreference::Automatic};
     bool vsync_enabled{true};
     DebugOptions debug;
+    PostProcessConfig post_process;
     std::string app_identifier{"fi.reaktio.engine"};
     std::string log_file_name{"reaktio-runtime.log"};
 };
