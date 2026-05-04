@@ -173,6 +173,30 @@ std::optional<std::string> read_text_file(const std::filesystem::path& path) {
     return buffer.str();
 }
 
+std::optional<std::vector<std::uint8_t>> read_binary_file(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        return std::nullopt;
+    }
+
+    input.seekg(0, std::ios::end);
+    const std::streamoff file_size = input.tellg();
+    if (file_size < 0) {
+        return std::nullopt;
+    }
+    input.seekg(0, std::ios::beg);
+
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(file_size));
+    if (!bytes.empty()) {
+        input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!input) {
+            return std::nullopt;
+        }
+    }
+
+    return bytes;
+}
+
 SectionMap parse_sections(
     foundation::CrashSafeLog& log,
     const std::filesystem::path& source_path,
@@ -279,6 +303,16 @@ bool try_parse_u16(std::string_view value, std::uint16_t& parsed) noexcept {
     return true;
 }
 
+bool try_parse_u8(std::string_view value, std::uint8_t& parsed) noexcept {
+    std::uint32_t converted = 0;
+    if (!try_parse_unsigned(value, converted) || converted > std::numeric_limits<std::uint8_t>::max()) {
+        return false;
+    }
+
+    parsed = static_cast<std::uint8_t>(converted);
+    return true;
+}
+
 bool try_parse_float(std::string_view value, float& parsed) noexcept {
     const std::string buffer = trim_copy(value);
     char* end = nullptr;
@@ -287,8 +321,89 @@ bool try_parse_float(std::string_view value, float& parsed) noexcept {
 }
 
 bool try_parse_texture_format(std::string_view value, CookedTextureFormat& parsed) noexcept {
-    if (lowercase_copy(value) == "rgba8") {
+    const std::string lowered = lowercase_copy(value);
+    if (lowered == "rgba8") {
         parsed = CookedTextureFormat::Rgba8;
+        return true;
+    }
+
+    if (lowered == "bc1") {
+        parsed = CookedTextureFormat::Bc1;
+        return true;
+    }
+
+    if (lowered == "bc3") {
+        parsed = CookedTextureFormat::Bc3;
+        return true;
+    }
+
+    if (lowered == "bc5") {
+        parsed = CookedTextureFormat::Bc5;
+        return true;
+    }
+
+    return false;
+}
+
+bool try_parse_texture_storage(std::string_view value, CookedTextureStorage& parsed) noexcept {
+    const std::string lowered = lowercase_copy(value);
+    if (lowered == "rgba8-inline") {
+        parsed = CookedTextureStorage::InlineRgba8;
+        return true;
+    }
+
+    if (lowered == "dds") {
+        parsed = CookedTextureStorage::Dds;
+        return true;
+    }
+
+    if (lowered == "ktx") {
+        parsed = CookedTextureStorage::Ktx;
+        return true;
+    }
+
+    return false;
+}
+
+bool try_parse_mesh_storage(std::string_view value, CookedMeshStorage& parsed) noexcept {
+    const std::string lowered = lowercase_copy(value);
+    if (lowered == "inline-lists") {
+        parsed = CookedMeshStorage::InlineLists;
+        return true;
+    }
+
+    if (lowered == "bgfx-geometry") {
+        parsed = CookedMeshStorage::BgfxGeometry;
+        return true;
+    }
+
+    return false;
+}
+
+bool try_parse_font_atlas_storage(std::string_view value, CookedFontAtlasStorage& parsed) noexcept {
+    const std::string lowered = lowercase_copy(value);
+    if (lowered == "raw-r8") {
+        parsed = CookedFontAtlasStorage::RawR8;
+        return true;
+    }
+
+    if (lowered == "none") {
+        parsed = CookedFontAtlasStorage::None;
+        return true;
+    }
+
+    return false;
+}
+
+bool try_parse_bool(std::string_view value, bool& parsed) noexcept {
+    const std::string lowered = lowercase_copy(value);
+    if (lowered == "true" || lowered == "1" || lowered == "yes" || lowered == "on") {
+        parsed = true;
+        return true;
+    }
+
+    if (lowered == "false" || lowered == "0" || lowered == "no" || lowered == "off") {
+        parsed = false;
         return true;
     }
 
@@ -371,26 +486,67 @@ std::optional<TextureAssetRecord> load_texture_record(
     const ParsedKeyValue* height_value = find_value(sections, "texture", "height");
     const ParsedKeyValue* format_value = find_value(sections, "texture", "format");
     const ParsedKeyValue* pixels_value = find_value(sections, "texture", "pixels");
-    if (width_value == nullptr || height_value == nullptr || format_value == nullptr || pixels_value == nullptr) {
-        log_message(log, foundation::LogLevel::Error, payload_path, 0, "Texture payload is missing required keys.");
-        return std::nullopt;
-    }
 
     TextureAssetRecord record{};
     record.authoring_id = std::string(authoring_id);
     record.runtime_label = std::string(runtime_label);
-    record.payload_path = payload_path;
-    if (!try_parse_u16(width_value->value, record.width) || !try_parse_u16(height_value->value, record.height) ||
-        !try_parse_texture_format(format_value->value, record.format) ||
-        !parse_hex_byte_list(pixels_value->value, record.pixel_bytes)) {
-        log_message(log, foundation::LogLevel::Error, payload_path, 0, "Texture payload contains invalid values.");
-        return std::nullopt;
-    }
+    record.metadata_path = payload_path;
 
-    const std::size_t expected_bytes = static_cast<std::size_t>(record.width) * record.height * 4u;
-    if (record.pixel_bytes.size() != expected_bytes) {
-        log_message(log, foundation::LogLevel::Error, payload_path, 0, "Texture payload byte count does not match dimensions.");
-        return std::nullopt;
+    const ParsedKeyValue* storage_value = find_value(sections, "texture", "storage");
+    const ParsedKeyValue* binary_payload_value = find_value(sections, "texture", "payload");
+    const ParsedKeyValue* srgb_value = find_value(sections, "texture", "srgb");
+    const ParsedKeyValue* generate_mips_value = find_value(sections, "texture", "generate_mips");
+
+    if (storage_value != nullptr || binary_payload_value != nullptr) {
+        if (storage_value == nullptr || binary_payload_value == nullptr || width_value == nullptr || height_value == nullptr || format_value == nullptr) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Container texture payload is missing required metadata.");
+            return std::nullopt;
+        }
+
+        if (!try_parse_texture_storage(storage_value->value, record.storage) ||
+            !try_parse_u16(width_value->value, record.width) ||
+            !try_parse_u16(height_value->value, record.height) ||
+            !try_parse_texture_format(format_value->value, record.format)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Container texture payload contains invalid metadata values.");
+            return std::nullopt;
+        }
+
+        if (srgb_value != nullptr && !try_parse_bool(srgb_value->value, record.srgb)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, srgb_value->line, "Texture payload srgb value is invalid.");
+            return std::nullopt;
+        }
+        if (generate_mips_value != nullptr && !try_parse_bool(generate_mips_value->value, record.generate_mips)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, generate_mips_value->line, "Texture payload generate_mips value is invalid.");
+            return std::nullopt;
+        }
+
+        record.data_path = std::filesystem::absolute(payload_path.parent_path() / binary_payload_value->value);
+        const std::optional<std::vector<std::uint8_t>> container_bytes = read_binary_file(record.data_path);
+        if (!container_bytes || container_bytes->empty()) {
+            log_message(log, foundation::LogLevel::Error, record.data_path, 0, "Unable to read cooked texture container payload.");
+            return std::nullopt;
+        }
+        record.payload_bytes = *container_bytes;
+    } else {
+        if (width_value == nullptr || height_value == nullptr || format_value == nullptr || pixels_value == nullptr) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Texture payload is missing required keys.");
+            return std::nullopt;
+        }
+
+        record.storage = CookedTextureStorage::InlineRgba8;
+        if (!try_parse_u16(width_value->value, record.width) ||
+            !try_parse_u16(height_value->value, record.height) ||
+            !try_parse_texture_format(format_value->value, record.format) ||
+            !parse_hex_byte_list(pixels_value->value, record.payload_bytes)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Texture payload contains invalid values.");
+            return std::nullopt;
+        }
+
+        const std::size_t expected_bytes = static_cast<std::size_t>(record.width) * record.height * 4u;
+        if (record.payload_bytes.size() != expected_bytes) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Texture payload byte count does not match dimensions.");
+            return std::nullopt;
+        }
     }
 
     record.resource = resource_registry.register_resource(
@@ -420,19 +576,92 @@ std::optional<MeshAssetRecord> load_mesh_record(
 
     const ParsedKeyValue* positions_value = find_value(sections, "mesh", "positions");
     const ParsedKeyValue* indices_value = find_value(sections, "mesh", "indices");
-    if (positions_value == nullptr || indices_value == nullptr) {
-        log_message(log, foundation::LogLevel::Error, payload_path, 0, "Mesh payload is missing required keys.");
-        return std::nullopt;
-    }
+    const ParsedKeyValue* storage_value = find_value(sections, "mesh", "storage");
+    const ParsedKeyValue* binary_payload_value = find_value(sections, "mesh", "payload");
+    const ParsedKeyValue* source_format_value = find_value(sections, "mesh", "source_format");
+    const ParsedKeyValue* scale_value = find_value(sections, "mesh", "scale");
+    const ParsedKeyValue* compressed_value = find_value(sections, "mesh", "compressed");
+    const ParsedKeyValue* flip_v_value = find_value(sections, "mesh", "flip_v");
+    const ParsedKeyValue* ccw_value = find_value(sections, "mesh", "ccw");
+    const ParsedKeyValue* pack_normals_value = find_value(sections, "mesh", "pack_normals");
+    const ParsedKeyValue* pack_uv_value = find_value(sections, "mesh", "pack_uv");
+    const ParsedKeyValue* tangents_value = find_value(sections, "mesh", "generate_tangents");
+    const ParsedKeyValue* barycentric_value = find_value(sections, "mesh", "barycentric");
+    const ParsedKeyValue* coordinate_system_value = find_value(sections, "mesh", "coordinate_system");
 
     MeshAssetRecord record{};
     record.authoring_id = std::string(authoring_id);
     record.runtime_label = std::string(runtime_label);
-    record.payload_path = payload_path;
-    if (!parse_position_list(positions_value->value, record.positions) ||
-        !parse_index_list(indices_value->value, record.indices)) {
-        log_message(log, foundation::LogLevel::Error, payload_path, 0, "Mesh payload contains invalid values.");
-        return std::nullopt;
+    record.metadata_path = payload_path;
+
+    if (storage_value != nullptr || binary_payload_value != nullptr) {
+        if (storage_value == nullptr || binary_payload_value == nullptr) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Container mesh payload is missing storage or payload metadata.");
+            return std::nullopt;
+        }
+
+        if (!try_parse_mesh_storage(storage_value->value, record.storage)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, storage_value->line, "Mesh payload storage value is invalid.");
+            return std::nullopt;
+        }
+        if (source_format_value != nullptr) {
+            record.source_format = source_format_value->value;
+        }
+        if (scale_value != nullptr && !try_parse_float(scale_value->value, record.scale)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, scale_value->line, "Mesh payload scale value is invalid.");
+            return std::nullopt;
+        }
+        if (compressed_value != nullptr && !try_parse_bool(compressed_value->value, record.compressed)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, compressed_value->line, "Mesh payload compressed value is invalid.");
+            return std::nullopt;
+        }
+        if (flip_v_value != nullptr && !try_parse_bool(flip_v_value->value, record.flip_v)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, flip_v_value->line, "Mesh payload flip_v value is invalid.");
+            return std::nullopt;
+        }
+        if (ccw_value != nullptr && !try_parse_bool(ccw_value->value, record.ccw)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, ccw_value->line, "Mesh payload ccw value is invalid.");
+            return std::nullopt;
+        }
+        if (pack_normals_value != nullptr && !try_parse_u8(pack_normals_value->value, record.pack_normals)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, pack_normals_value->line, "Mesh payload pack_normals value is invalid.");
+            return std::nullopt;
+        }
+        if (pack_uv_value != nullptr && !try_parse_u8(pack_uv_value->value, record.pack_uv)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, pack_uv_value->line, "Mesh payload pack_uv value is invalid.");
+            return std::nullopt;
+        }
+        if (tangents_value != nullptr && !try_parse_bool(tangents_value->value, record.generate_tangents)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, tangents_value->line, "Mesh payload generate_tangents value is invalid.");
+            return std::nullopt;
+        }
+        if (barycentric_value != nullptr && !try_parse_bool(barycentric_value->value, record.barycentric)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, barycentric_value->line, "Mesh payload barycentric value is invalid.");
+            return std::nullopt;
+        }
+        if (coordinate_system_value != nullptr) {
+            record.coordinate_system = coordinate_system_value->value;
+        }
+
+        record.data_path = std::filesystem::absolute(payload_path.parent_path() / binary_payload_value->value);
+        const std::optional<std::vector<std::uint8_t>> mesh_bytes = read_binary_file(record.data_path);
+        if (!mesh_bytes || mesh_bytes->empty()) {
+            log_message(log, foundation::LogLevel::Error, record.data_path, 0, "Unable to read cooked mesh container payload.");
+            return std::nullopt;
+        }
+        record.payload_bytes = *mesh_bytes;
+    } else {
+        if (positions_value == nullptr || indices_value == nullptr) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Mesh payload is missing required keys.");
+            return std::nullopt;
+        }
+
+        record.storage = CookedMeshStorage::InlineLists;
+        if (!parse_position_list(positions_value->value, record.positions) ||
+            !parse_index_list(indices_value->value, record.indices)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Mesh payload contains invalid values.");
+            return std::nullopt;
+        }
     }
 
     record.resource = resource_registry.register_resource(
@@ -469,16 +698,71 @@ std::optional<FontAssetRecord> load_font_record(
     FontAssetRecord record{};
     record.authoring_id = std::string(authoring_id);
     record.runtime_label = std::string(runtime_label);
-    record.payload_path = payload_path;
+    record.metadata_path = payload_path;
     const ParsedKeyValue* line_height_value = find_value(sections, "font", "line_height");
     const ParsedKeyValue* atlas_width_value = find_value(sections, "font", "atlas_width");
     const ParsedKeyValue* atlas_height_value = find_value(sections, "font", "atlas_height");
+    const ParsedKeyValue* storage_value = find_value(sections, "font", "storage");
+    const ParsedKeyValue* atlas_payload_value = find_value(sections, "font", "atlas_payload");
+    const ParsedKeyValue* pixel_height_value = find_value(sections, "font", "pixel_height");
+    const ParsedKeyValue* line_spacing_value = find_value(sections, "font", "line_spacing");
+    const ParsedKeyValue* ascent_value = find_value(sections, "font", "ascent");
+    const ParsedKeyValue* descent_value = find_value(sections, "font", "descent");
+    const ParsedKeyValue* line_gap_value = find_value(sections, "font", "line_gap");
+    const ParsedKeyValue* sdf_value = find_value(sections, "font", "sdf");
+    const ParsedKeyValue* fallbacks_value = find_value(sections, "font", "fallbacks");
     if (line_height_value == nullptr || atlas_width_value == nullptr || atlas_height_value == nullptr ||
         !try_parse_float(line_height_value->value, record.line_height) ||
         !try_parse_u16(atlas_width_value->value, record.atlas_width) ||
         !try_parse_u16(atlas_height_value->value, record.atlas_height)) {
         log_message(log, foundation::LogLevel::Error, payload_path, 0, "Font payload is missing required metadata.");
         return std::nullopt;
+    }
+
+    if (pixel_height_value != nullptr && !try_parse_float(pixel_height_value->value, record.pixel_height)) {
+        log_message(log, foundation::LogLevel::Error, payload_path, pixel_height_value->line, "Font pixel_height is invalid.");
+        return std::nullopt;
+    }
+    if (line_spacing_value != nullptr && !try_parse_float(line_spacing_value->value, record.line_spacing)) {
+        log_message(log, foundation::LogLevel::Error, payload_path, line_spacing_value->line, "Font line_spacing is invalid.");
+        return std::nullopt;
+    }
+    if (ascent_value != nullptr && !try_parse_float(ascent_value->value, record.ascent)) {
+        log_message(log, foundation::LogLevel::Error, payload_path, ascent_value->line, "Font ascent is invalid.");
+        return std::nullopt;
+    }
+    if (descent_value != nullptr && !try_parse_float(descent_value->value, record.descent)) {
+        log_message(log, foundation::LogLevel::Error, payload_path, descent_value->line, "Font descent is invalid.");
+        return std::nullopt;
+    }
+    if (line_gap_value != nullptr && !try_parse_float(line_gap_value->value, record.line_gap)) {
+        log_message(log, foundation::LogLevel::Error, payload_path, line_gap_value->line, "Font line_gap is invalid.");
+        return std::nullopt;
+    }
+    if (sdf_value != nullptr && !try_parse_bool(sdf_value->value, record.sdf)) {
+        log_message(log, foundation::LogLevel::Error, payload_path, sdf_value->line, "Font sdf flag is invalid.");
+        return std::nullopt;
+    }
+    if (fallbacks_value != nullptr) {
+        record.fallback_ids = split_string(fallbacks_value->value, ',');
+    }
+
+    if (storage_value != nullptr || atlas_payload_value != nullptr) {
+        if (storage_value == nullptr || atlas_payload_value == nullptr) {
+            log_message(log, foundation::LogLevel::Error, payload_path, 0, "Container font payload is missing storage or atlas_payload metadata.");
+            return std::nullopt;
+        }
+        if (!try_parse_font_atlas_storage(storage_value->value, record.atlas_storage)) {
+            log_message(log, foundation::LogLevel::Error, payload_path, storage_value->line, "Font atlas storage value is invalid.");
+            return std::nullopt;
+        }
+        record.atlas_path = std::filesystem::absolute(payload_path.parent_path() / atlas_payload_value->value);
+        const std::optional<std::vector<std::uint8_t>> atlas_bytes = read_binary_file(record.atlas_path);
+        if (!atlas_bytes || atlas_bytes->empty()) {
+            log_message(log, foundation::LogLevel::Error, record.atlas_path, 0, "Unable to read cooked font atlas payload.");
+            return std::nullopt;
+        }
+        record.atlas_bytes = *atlas_bytes;
     }
 
     for (const auto& [key, parsed] : section_it->second) {
@@ -494,8 +778,8 @@ std::optional<FontAssetRecord> load_font_record(
         }
 
         const std::vector<std::string> values = split_string(parsed.value, ',');
-        if (values.size() != 7u) {
-            log_message(log, foundation::LogLevel::Error, payload_path, parsed.line, "Font glyph entry must contain 7 values.");
+        if (values.size() != 7u && values.size() != 9u) {
+            log_message(log, foundation::LogLevel::Error, payload_path, parsed.line, "Font glyph entry must contain 7 or 9 values.");
             return std::nullopt;
         }
 
@@ -503,10 +787,11 @@ std::optional<FontAssetRecord> load_font_record(
         if (!try_parse_float(values[0], glyph.advance) ||
             !try_parse_float(values[1], glyph.bearing_x) ||
             !try_parse_float(values[2], glyph.bearing_y) ||
-            !try_parse_float(values[3], glyph.uv_rect[0]) ||
-            !try_parse_float(values[4], glyph.uv_rect[1]) ||
-            !try_parse_float(values[5], glyph.uv_rect[2]) ||
-            !try_parse_float(values[6], glyph.uv_rect[3])) {
+            (values.size() == 9u && (!try_parse_float(values[3], glyph.width) || !try_parse_float(values[4], glyph.height))) ||
+            !try_parse_float(values[values.size() == 9u ? 5u : 3u], glyph.uv_rect[0]) ||
+            !try_parse_float(values[values.size() == 9u ? 6u : 4u], glyph.uv_rect[1]) ||
+            !try_parse_float(values[values.size() == 9u ? 7u : 5u], glyph.uv_rect[2]) ||
+            !try_parse_float(values[values.size() == 9u ? 8u : 6u], glyph.uv_rect[3])) {
             log_message(log, foundation::LogLevel::Error, payload_path, parsed.line, "Font glyph entry contains invalid values.");
             return std::nullopt;
         }
@@ -526,8 +811,6 @@ std::optional<FontAssetRecord> load_font_record(
 bool CookedAssetLibrary::load(
     foundation::ResourceRegistry& resource_registry,
     foundation::CrashSafeLog& log) {
-    clear();
-
     std::optional<std::filesystem::path> manifest_path = configured_manifest_path_from_env();
     if (manifest_path && !std::filesystem::exists(*manifest_path)) {
         log_message(
@@ -544,33 +827,63 @@ bool CookedAssetLibrary::load(
     }
 
     if (!manifest_path) {
+        clear();
         log.write(foundation::LogLevel::Warning, "No cooked render asset manifest was found; continuing without cooked assets.");
         return true;
     }
 
-    summary_.manifest_path = *manifest_path;
+    return load(*manifest_path, resource_registry, log);
+}
+
+bool CookedAssetLibrary::load(
+    const std::filesystem::path& manifest_path,
+    foundation::ResourceRegistry& resource_registry,
+    foundation::CrashSafeLog& log) {
+    clear();
+
+    const std::filesystem::path resolved_manifest_path = std::filesystem::absolute(manifest_path);
+    if (!std::filesystem::exists(resolved_manifest_path)) {
+        log_message(log, foundation::LogLevel::Error, resolved_manifest_path, 0, "Cooked render asset manifest does not exist.");
+        return false;
+    }
+
+    summary_.manifest_path = resolved_manifest_path;
     summary_.loaded_from_manifest = true;
 
-    const std::optional<std::string> manifest_text = read_text_file(*manifest_path);
+    const std::optional<std::string> manifest_text = read_text_file(resolved_manifest_path);
     if (!manifest_text) {
-        log_message(log, foundation::LogLevel::Error, *manifest_path, 0, "Unable to read cooked render asset manifest.");
+        log_message(log, foundation::LogLevel::Error, resolved_manifest_path, 0, "Unable to read cooked render asset manifest.");
         clear();
         return false;
     }
 
     bool fatal_error = false;
-    const SectionMap sections = parse_sections(log, *manifest_path, *manifest_text, fatal_error);
+    const SectionMap sections = parse_sections(log, resolved_manifest_path, *manifest_text, fatal_error);
     if (fatal_error) {
         clear();
         return false;
     }
 
-    const std::filesystem::path manifest_directory = manifest_path->parent_path();
+    if (const ParsedKeyValue* schema_value = find_value(sections, "meta", "schema");
+        schema_value != nullptr && lowercase_copy(schema_value->value) != "reaktio.cooked.render_asset_manifest.v1") {
+        log_message(
+            log,
+            foundation::LogLevel::Warning,
+            resolved_manifest_path,
+            schema_value->line,
+            "Cooked render asset manifest schema is unexpected; attempting to continue.");
+    }
+
+    const std::filesystem::path manifest_directory = resolved_manifest_path.parent_path();
     for (const auto& [section_name, values] : sections) {
+        if (section_name == "meta") {
+            continue;
+        }
+
         const auto runtime_label_it = values.find("runtime_label");
         const auto payload_it = values.find("payload");
         if (runtime_label_it == values.end() || payload_it == values.end()) {
-            log_message(log, foundation::LogLevel::Error, *manifest_path, 0, "Cooked asset section is missing runtime_label or payload.");
+            log_message(log, foundation::LogLevel::Error, resolved_manifest_path, 0, "Cooked asset section is missing runtime_label or payload.");
             clear();
             return false;
         }
@@ -588,7 +901,7 @@ bool CookedAssetLibrary::load(
                 clear();
                 return false;
             }
-            summary_.total_payload_bytes += record->pixel_bytes.size();
+            summary_.total_payload_bytes += record->payload_bytes.size();
             textures_.emplace(record->resource.value(), std::move(*record));
             ++summary_.texture_count;
             continue;
@@ -606,9 +919,13 @@ bool CookedAssetLibrary::load(
                 clear();
                 return false;
             }
-            summary_.total_payload_bytes +=
-                record->positions.size() * sizeof(std::array<float, 3>) +
-                record->indices.size() * sizeof(std::uint16_t);
+            if (record->storage == CookedMeshStorage::BgfxGeometry) {
+                summary_.total_payload_bytes += record->payload_bytes.size();
+            } else {
+                summary_.total_payload_bytes +=
+                    record->positions.size() * sizeof(std::array<float, 3>) +
+                    record->indices.size() * sizeof(std::uint16_t);
+            }
             meshes_.emplace(record->resource.value(), std::move(*record));
             ++summary_.mesh_count;
             continue;
@@ -626,13 +943,13 @@ bool CookedAssetLibrary::load(
                 clear();
                 return false;
             }
-            summary_.total_payload_bytes += record->glyphs.size() * sizeof(FontGlyphRecord);
+            summary_.total_payload_bytes += record->glyphs.size() * sizeof(FontGlyphRecord) + record->atlas_bytes.size();
             fonts_.emplace(record->resource.value(), std::move(*record));
             ++summary_.font_count;
             continue;
         }
 
-        log_message(log, foundation::LogLevel::Warning, *manifest_path, 0, "Unknown cooked asset section was ignored.");
+        log_message(log, foundation::LogLevel::Warning, resolved_manifest_path, 0, "Unknown cooked asset section was ignored.");
     }
 
     return true;

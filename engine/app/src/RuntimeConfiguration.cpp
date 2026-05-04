@@ -1,8 +1,11 @@
 #include "reaktio/app/RuntimeConfiguration.hpp"
 
+#include "reaktio/gameplay/Modifiers.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <initializer_list>
@@ -346,20 +349,84 @@ void load_string_value(
     }
 }
 
+std::vector<std::string> split_csv(std::string_view value) {
+    std::vector<std::string> values;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t end = value.find(',', start);
+        std::string item = trim_copy(end == std::string_view::npos ? value.substr(start) : value.substr(start, end - start));
+        if (!item.empty()) {
+            values.push_back(std::move(item));
+        }
+        if (end == std::string_view::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return values;
+}
+
+void set_runtime_action_binding(
+    RuntimeConfiguration& configuration,
+    std::string_view context_id,
+    std::string_view action_id,
+    std::string_view primary,
+    std::string_view secondary = {},
+    std::string_view device_profile_id = gameplay::k_default_input_device_profile_id) {
+    configuration.input_bindings.set_action_binding(action_id, primary, secondary);
+    configuration.input_action_maps.set_binding(context_id, action_id, primary, secondary, device_profile_id);
+}
+
+void load_path_value(
+    const std::filesystem::path& base_directory,
+    const SectionMap& sections,
+    std::string_view section_name,
+    std::string_view key_name,
+    std::filesystem::path& target) {
+    if (const ParsedKeyValue* parsed_value = find_value(sections, section_name, key_name)) {
+        const std::filesystem::path parsed_path(parsed_value->value);
+        target = parsed_path.is_absolute()
+            ? std::filesystem::absolute(parsed_path)
+            : std::filesystem::absolute(base_directory / parsed_path);
+    }
+}
+
 void load_input_binding_section(
     RuntimeConfigurationLoadResult& result,
     std::string_view section_name,
-    const SectionValues& values,
-    platform::InputBindingsConfig& input_bindings) {
+    const SectionValues& values) {
     constexpr std::string_view k_prefix = "input_binding.";
-    const std::string action_id = std::string(section_name.substr(k_prefix.size()));
+    std::string context_id{gameplay::k_default_input_context_id};
+    std::string action_id = std::string(section_name.substr(k_prefix.size()));
+    if (const std::size_t separator = action_id.find('.'); separator != std::string::npos) {
+        context_id = action_id.substr(0, separator);
+        action_id = action_id.substr(separator + 1);
+    }
+
+    if (const auto it = values.find("context"); it != values.end()) {
+        context_id = it->second.value;
+    }
+    if (const auto it = values.find("action"); it != values.end()) {
+        action_id = it->second.value;
+    }
     if (action_id.empty()) {
         add_issue(result, true, 0, "Input-binding section name is missing an action id.");
         return;
     }
+    if (context_id.empty()) {
+        add_issue(result, true, 0, "Input-binding section is missing an input context id.");
+        return;
+    }
 
+    std::string device_profile_id{gameplay::k_default_input_device_profile_id};
     std::string primary;
     std::string secondary;
+    if (const auto it = values.find("profile"); it != values.end()) {
+        device_profile_id = it->second.value;
+    }
+    if (const auto it = values.find("device_profile"); it != values.end()) {
+        device_profile_id = it->second.value;
+    }
     if (const auto it = values.find("primary"); it != values.end()) {
         primary = it->second.value;
     }
@@ -376,8 +443,69 @@ void load_input_binding_section(
         return;
     }
 
-    warn_unknown_keys(result, section_name, values, {"primary", "secondary"});
-    input_bindings.set_action_binding(action_id, primary, secondary);
+    warn_unknown_keys(result, section_name, values, {"context", "action", "profile", "device_profile", "primary", "secondary"});
+    set_runtime_action_binding(result.configuration, context_id, action_id, primary, secondary, device_profile_id);
+}
+
+void load_input_section(
+    RuntimeConfigurationLoadResult& result,
+    const SectionValues& values) {
+    if (const auto it = values.find("active_device_profile"); it != values.end()) {
+        if (it->second.value.empty()) {
+            add_issue(result, true, it->second.line, "Input active_device_profile cannot be empty.");
+        } else {
+            result.configuration.input_action_maps.set_active_device_profile(it->second.value);
+        }
+    }
+
+    if (const auto it = values.find("active_contexts"); it != values.end()) {
+        result.configuration.input_action_maps.clear_active_contexts();
+        for (const std::string& context_id : split_csv(it->second.value)) {
+            result.configuration.input_action_maps.set_context_active(context_id, true);
+        }
+    }
+
+    warn_unknown_keys(result, "input", values, {"active_device_profile", "active_contexts"});
+}
+
+void load_input_context_section(
+    RuntimeConfigurationLoadResult& result,
+    std::string_view section_name,
+    const SectionValues& values) {
+    constexpr std::string_view k_prefix = "input_context.";
+    const std::string context_id = std::string(section_name.substr(k_prefix.size()));
+    if (context_id.empty()) {
+        add_issue(result, true, 0, "Input-context section name is missing a context id.");
+        return;
+    }
+
+    bool active = result.configuration.input_action_maps.is_context_active(context_id);
+    if (const auto it = values.find("active"); it != values.end() && !try_parse_bool(it->second.value, active)) {
+        add_issue(result, true, it->second.line, "Invalid active flag for [" + std::string(section_name) + "].");
+    }
+    result.configuration.input_action_maps.set_context_active(context_id, active);
+
+    warn_unknown_keys(result, section_name, values, {"active"});
+}
+
+void load_input_device_profile_section(
+    RuntimeConfigurationLoadResult& result,
+    std::string_view section_name,
+    const SectionValues& values) {
+    constexpr std::string_view k_prefix = "input_device_profile.";
+    const std::string profile_id = std::string(section_name.substr(k_prefix.size()));
+    if (profile_id.empty()) {
+        add_issue(result, true, 0, "Input-device-profile section name is missing a profile id.");
+        return;
+    }
+
+    std::string display_name = profile_id;
+    if (const auto it = values.find("display_name"); it != values.end()) {
+        display_name = it->second.value;
+    }
+    result.configuration.input_action_maps.add_device_profile(profile_id, display_name);
+
+    warn_unknown_keys(result, section_name, values, {"display_name"});
 }
 
 void load_mode_configuration_section(
@@ -397,6 +525,85 @@ void load_mode_configuration_section(
     }
 }
 
+void load_modifier_section(
+    RuntimeConfigurationLoadResult& result,
+    std::string_view section_name,
+    const SectionValues& values,
+    gameplay::ModifierStore& modifiers) {
+    constexpr std::string_view k_prefix = "modifier.";
+    const std::string mode_id = std::string(section_name.substr(k_prefix.size()));
+    if (mode_id.empty()) {
+        add_issue(result, true, 0, "Modifier section name is missing a mode id.");
+        return;
+    }
+
+    for (const auto& [key, parsed] : values) {
+        gameplay::ModifierEntry entry{};
+        entry.id = key;
+        entry.kind = gameplay::classify_modifier_id(key);
+
+        switch (entry.kind) {
+        case gameplay::ModifierKind::SpeedMultiplier: {
+            double numeric = 1.0;
+            if (!try_parse_double(parsed.value, numeric)) {
+                add_issue(result, true, parsed.line,
+                    "Modifier '" + std::string(key) + "' in section [" + std::string(section_name) +
+                    "] expects a numeric multiplier.");
+                continue;
+            }
+            entry.numeric_parameter = numeric;
+            entry.enabled = std::isfinite(numeric) && std::abs(numeric - 1.0) > 1e-6;
+            break;
+        }
+        case gameplay::ModifierKind::MirrorChannels: {
+            std::uint64_t lane_count = 0;
+            if (!try_parse_unsigned<std::uint64_t>(parsed.value, lane_count)) {
+                add_issue(result, true, parsed.line,
+                    "Modifier '" + std::string(key) + "' in section [" + std::string(section_name) +
+                    "] expects an unsigned lane count.");
+                continue;
+            }
+            entry.integer_parameter = static_cast<std::int64_t>(lane_count);
+            entry.enabled = lane_count > 1;
+            break;
+        }
+        case gameplay::ModifierKind::Autoplay:
+        case gameplay::ModifierKind::NoFail:
+        case gameplay::ModifierKind::PracticeAssist: {
+            bool boolean = false;
+            if (!try_parse_bool(parsed.value, boolean)) {
+                add_issue(result, true, parsed.line,
+                    "Modifier '" + std::string(key) + "' in section [" + std::string(section_name) +
+                    "] expects a boolean value.");
+                continue;
+            }
+            entry.boolean_parameter = boolean;
+            entry.enabled = boolean;
+            break;
+        }
+        case gameplay::ModifierKind::Custom: {
+            double numeric = 0.0;
+            bool boolean = false;
+            if (try_parse_double(parsed.value, numeric)) {
+                entry.numeric_parameter = numeric;
+                entry.enabled = std::isfinite(numeric) && numeric != 0.0;
+            } else if (try_parse_bool(parsed.value, boolean)) {
+                entry.boolean_parameter = boolean;
+                entry.enabled = boolean;
+            } else {
+                add_issue(result, false, parsed.line,
+                    "Custom modifier '" + std::string(key) + "' in section [" + std::string(section_name) +
+                    "] could not be parsed as numeric or boolean; storing as disabled string entry.");
+                entry.enabled = false;
+            }
+            break;
+        }
+        }
+
+        modifiers.set(mode_id, std::move(entry));
+    }
+}
+
 } // namespace
 
 bool RuntimeConfigurationLoadResult::success() const noexcept {
@@ -409,27 +616,39 @@ RuntimeConfiguration make_default_runtime_configuration() {
     RuntimeConfiguration configuration{};
     configuration.runtime_budget = foundation::make_bootstrap_budget();
     configuration.application_config = platform::make_smoke_application_config();
+    configuration.hot_reload.enabled = true;
+    configuration.hot_reload.poll_interval_seconds = 0.25;
+    configuration.hot_reload.watch_charts = true;
+    configuration.hot_reload.watch_shaders = true;
+    configuration.hot_reload.watch_materials = true;
+    configuration.hot_reload.watch_selected_content = true;
     configuration.startup_mode_id = "mode.reference.sandbox";
     configuration.random_seed = 0x5245414b54494f32ull;
 
-    configuration.input_bindings.set_action_binding("toggle_fullscreen", "keyboard:F11");
-    configuration.input_bindings.set_action_binding("request_quit", "keyboard:Escape");
-    configuration.input_bindings.set_action_binding("transport_pause", "keyboard:Space");
-    configuration.input_bindings.set_action_binding("transport_restart", "keyboard:R");
-    configuration.input_bindings.set_action_binding("calibration_output_mode", "keyboard:O");
-    configuration.input_bindings.set_action_binding("calibration_input_mode", "keyboard:I");
-    configuration.input_bindings.set_action_binding("calibration_commit", "keyboard:Return");
-    configuration.input_bindings.set_action_binding("calibration_clear", "keyboard:Backspace");
-    configuration.input_bindings.set_action_binding("calibration_adjust_negative", "keyboard:Left");
-    configuration.input_bindings.set_action_binding("calibration_adjust_positive", "keyboard:Right");
-    configuration.input_bindings.set_action_binding("practice_speed_decrease", "keyboard:Z");
-    configuration.input_bindings.set_action_binding("practice_speed_increase", "keyboard:X");
-    configuration.input_bindings.set_action_binding("practice_speed_reset", "keyboard:C");
-    configuration.input_bindings.set_action_binding("practice_loop_mark_start", "keyboard:J");
-    configuration.input_bindings.set_action_binding("practice_loop_mark_end", "keyboard:K");
-    configuration.input_bindings.set_action_binding("practice_loop_apply", "keyboard:L");
-    configuration.input_bindings.set_action_binding("practice_loop_clear", "keyboard:U");
-    configuration.input_bindings.set_action_binding("practice_offset_visualization_toggle", "keyboard:V");
+    configuration.input_action_maps.add_device_profile("keyboard_mouse", "Keyboard and Mouse");
+    configuration.input_action_maps.add_device_profile("gamepad", "Gamepad");
+    configuration.input_action_maps.set_active_device_profile("keyboard_mouse");
+    configuration.input_action_maps.set_context_active("system", true);
+    configuration.input_action_maps.set_context_active("gameplay", true);
+
+    set_runtime_action_binding(configuration, "system", "toggle_fullscreen", "keyboard:F11");
+    set_runtime_action_binding(configuration, "system", "request_quit", "keyboard:Escape");
+    set_runtime_action_binding(configuration, "gameplay", "transport_pause", "keyboard:Space");
+    set_runtime_action_binding(configuration, "gameplay", "transport_restart", "keyboard:R");
+    set_runtime_action_binding(configuration, "gameplay", "calibration_output_mode", "keyboard:O");
+    set_runtime_action_binding(configuration, "gameplay", "calibration_input_mode", "keyboard:I");
+    set_runtime_action_binding(configuration, "gameplay", "calibration_commit", "keyboard:Return");
+    set_runtime_action_binding(configuration, "gameplay", "calibration_clear", "keyboard:Backspace");
+    set_runtime_action_binding(configuration, "gameplay", "calibration_adjust_negative", "keyboard:Left");
+    set_runtime_action_binding(configuration, "gameplay", "calibration_adjust_positive", "keyboard:Right");
+    set_runtime_action_binding(configuration, "gameplay", "practice_speed_decrease", "keyboard:Z");
+    set_runtime_action_binding(configuration, "gameplay", "practice_speed_increase", "keyboard:X");
+    set_runtime_action_binding(configuration, "gameplay", "practice_speed_reset", "keyboard:C");
+    set_runtime_action_binding(configuration, "gameplay", "practice_loop_mark_start", "keyboard:J");
+    set_runtime_action_binding(configuration, "gameplay", "practice_loop_mark_end", "keyboard:K");
+    set_runtime_action_binding(configuration, "gameplay", "practice_loop_apply", "keyboard:L");
+    set_runtime_action_binding(configuration, "gameplay", "practice_loop_clear", "keyboard:U");
+    set_runtime_action_binding(configuration, "gameplay", "practice_offset_visualization_toggle", "keyboard:V");
 
     configuration.mode_configuration.set("mode.reference.sandbox", "velocity_scale", "1.0");
     configuration.mode_configuration.set("mode.reference.sandbox", "hit_window_half_width", "32.0");
@@ -446,6 +665,22 @@ RuntimeConfiguration make_default_runtime_configuration() {
         "mode.reference.sandbox",
         "debug_font_authoring_id",
         "reference.sandbox.font.debug");
+
+    {
+        gameplay::ModifierEntry speed_entry{};
+        speed_entry.id = std::string(gameplay::modifier_ids::k_speed_multiplier);
+        speed_entry.kind = gameplay::ModifierKind::SpeedMultiplier;
+        speed_entry.numeric_parameter = 1.0;
+        speed_entry.enabled = false;
+        configuration.modifiers.set("mode.reference.sandbox", speed_entry);
+
+        gameplay::ModifierEntry practice_entry{};
+        practice_entry.id = std::string(gameplay::modifier_ids::k_practice_assist);
+        practice_entry.kind = gameplay::ModifierKind::PracticeAssist;
+        practice_entry.boolean_parameter = true;
+        practice_entry.enabled = true;
+        configuration.modifiers.set("mode.reference.sandbox", practice_entry);
+    }
 
     return configuration;
 }
@@ -635,6 +870,10 @@ RuntimeConfigurationLoadResult load_runtime_configuration() {
             {"enable_startup_diagnostics", "enable_debug_overlay", "enable_input_diagnostics", "enable_gpu_debug"});
     });
 
+    process_known_section("input", [&](const SectionValues& values) {
+        load_input_section(result, values);
+    });
+
     process_known_section("post_process", [&](const SectionValues& values) {
         load_typed_value(result, sections, "post_process", "enabled", "post-process enabled flag", result.configuration.application_config.post_process.enabled, try_parse_bool);
         load_typed_value(result, sections, "post_process", "bloom_threshold", "bloom threshold", result.configuration.application_config.post_process.bloom_threshold, [](std::string_view value, float& parsed) {
@@ -774,6 +1013,29 @@ RuntimeConfigurationLoadResult load_runtime_configuration() {
                 "color_grade_b"});
     });
 
+    process_known_section("hot_reload", [&](const SectionValues& values) {
+        load_typed_value(result, sections, "hot_reload", "enabled", "hot-reload enabled flag", result.configuration.hot_reload.enabled, try_parse_bool);
+        load_typed_value(result, sections, "hot_reload", "poll_interval_seconds", "hot-reload poll interval", result.configuration.hot_reload.poll_interval_seconds, [](std::string_view value, double& parsed) {
+            return try_parse_double(value, parsed) && parsed > 0.0;
+        });
+        load_typed_value(result, sections, "hot_reload", "watch_charts", "chart hot-reload flag", result.configuration.hot_reload.watch_charts, try_parse_bool);
+        load_typed_value(result, sections, "hot_reload", "watch_shaders", "shader hot-reload flag", result.configuration.hot_reload.watch_shaders, try_parse_bool);
+        load_typed_value(result, sections, "hot_reload", "watch_materials", "material hot-reload flag", result.configuration.hot_reload.watch_materials, try_parse_bool);
+        load_typed_value(result, sections, "hot_reload", "watch_selected_content", "selected-content hot-reload flag", result.configuration.hot_reload.watch_selected_content, try_parse_bool);
+        const std::filesystem::path config_directory = result.source_path.empty()
+            ? std::filesystem::current_path()
+            : result.source_path.parent_path();
+        load_path_value(config_directory, sections, "hot_reload", "chart_manifest_path", result.configuration.hot_reload.chart_manifest_path);
+        load_path_value(config_directory, sections, "hot_reload", "shader_manifest_path", result.configuration.hot_reload.shader_manifest_path);
+        load_path_value(config_directory, sections, "hot_reload", "material_manifest_path", result.configuration.hot_reload.material_manifest_path);
+        load_path_value(config_directory, sections, "hot_reload", "selected_content_manifest_path", result.configuration.hot_reload.selected_content_manifest_path);
+        warn_unknown_keys(
+            result,
+            "hot_reload",
+            values,
+            {"enabled", "poll_interval_seconds", "watch_charts", "watch_shaders", "watch_materials", "watch_selected_content", "chart_manifest_path", "shader_manifest_path", "material_manifest_path", "selected_content_manifest_path"});
+    });
+
     process_known_section("budget", [&](const SectionValues& values) {
         load_typed_value(result, sections, "budget", "target_frame_ms", "target frame budget", result.configuration.runtime_budget.target_frame_ms, try_parse_double);
         load_typed_value(result, sections, "budget", "simulation_budget_ms", "simulation budget", result.configuration.runtime_budget.simulation_budget_ms, try_parse_double);
@@ -802,13 +1064,31 @@ RuntimeConfigurationLoadResult load_runtime_configuration() {
 
         if (section_name.rfind("input_binding.", 0) == 0) {
             processed_sections.insert(section_name);
-            load_input_binding_section(result, section_name, values, result.configuration.input_bindings);
+            load_input_binding_section(result, section_name, values);
+            continue;
+        }
+
+        if (section_name.rfind("input_context.", 0) == 0) {
+            processed_sections.insert(section_name);
+            load_input_context_section(result, section_name, values);
+            continue;
+        }
+
+        if (section_name.rfind("input_device_profile.", 0) == 0) {
+            processed_sections.insert(section_name);
+            load_input_device_profile_section(result, section_name, values);
             continue;
         }
 
         if (section_name.rfind("mode.", 0) == 0) {
             processed_sections.insert(section_name);
             load_mode_configuration_section(result, section_name, values, result.configuration.mode_configuration);
+            continue;
+        }
+
+        if (section_name.rfind("modifier.", 0) == 0) {
+            processed_sections.insert(section_name);
+            load_modifier_section(result, section_name, values, result.configuration.modifiers);
             continue;
         }
     }

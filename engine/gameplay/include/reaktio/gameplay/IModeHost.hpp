@@ -21,9 +21,16 @@ class RenderExtractionContext;
 
 namespace reaktio::gameplay {
 class EventBus;
+class InputActionMapStore;
 class ITransportControl;
+class ModeInputFrame;
 class ModeConfigurationStore;
+class ModeFlowController;
+class ModifierSet;
+class ModifierStore;
+class PresentationEventBus;
 class ReplayRecorder;
+class SaveDataStore;
 class WorldModel;
 } // namespace reaktio::gameplay
 
@@ -35,6 +42,9 @@ class IModeHost {
 
     [[nodiscard]] virtual const foundation::RuntimeBudget& runtime_budget() const noexcept = 0;
     [[nodiscard]] virtual const platform::StackProbe& stack_probe() const noexcept = 0;
+    [[nodiscard]] virtual const ModeInputFrame& input() const noexcept = 0;
+    [[nodiscard]] virtual const InputActionMapStore& input_action_maps() const noexcept = 0;
+    [[nodiscard]] virtual InputActionMapStore& input_action_maps() noexcept = 0;
     [[nodiscard]] virtual const platform::InputSnapshot& input_snapshot() const noexcept = 0;
     [[nodiscard]] virtual const platform::InputBindingsConfig& input_bindings() const noexcept = 0;
     [[nodiscard]] virtual const platform::FrameTiming& frame_timing() const noexcept = 0;
@@ -42,8 +52,13 @@ class IModeHost {
     [[nodiscard]] virtual foundation::DeterministicRandomService& random_service() noexcept = 0;
     [[nodiscard]] virtual foundation::ResourceRegistry& resource_registry() noexcept = 0;
     [[nodiscard]] virtual const ModeConfigurationStore& mode_configuration() const noexcept = 0;
+    [[nodiscard]] virtual const ModifierStore& modifier_store() const noexcept = 0;
+    [[nodiscard]] virtual const ModifierSet& modifiers() const noexcept = 0;
     [[nodiscard]] virtual EventBus& event_bus() noexcept = 0;
+    [[nodiscard]] virtual PresentationEventBus& presentation_events() noexcept = 0;
+    [[nodiscard]] virtual ModeFlowController& flow() noexcept = 0;
     [[nodiscard]] virtual ReplayRecorder& replay() noexcept = 0;
+    [[nodiscard]] virtual SaveDataStore& save_data() noexcept = 0;
     [[nodiscard]] virtual WorldModel& world_model() noexcept = 0;
     [[nodiscard]] virtual ITransportControl& transport() noexcept = 0;
     [[nodiscard]] virtual render::RenderExtractionContext& render_extraction() noexcept = 0;

@@ -34,16 +34,16 @@ template <typename ModeType>
 bool GameModeRegistry::register_mode() {
     const ModeDescriptor& descriptor = ModeType::mode_descriptor();
 
-  if (has_mode(descriptor.id)) {
-    return false;
-  }
+    if (descriptor.id.empty() || descriptor.api_version != k_current_mode_api_version || has_mode(descriptor.id)) {
+        return false;
+    }
 
     registered_modes_.push_back(RegisteredMode{
         .descriptor = descriptor,
         .create = []() -> std::unique_ptr<IGameMode> { return std::make_unique<ModeType>(); },
     });
 
-  return true;
+    return true;
 }
 
 } // namespace reaktio::gameplay

@@ -1,14 +1,20 @@
 #pragma once
 
 #include "reaktio/foundation/CrashSafeLog.hpp"
+#include "reaktio/content/HotReload.hpp"
 #include "reaktio/foundation/DeterministicRandom.hpp"
 #include "reaktio/foundation/ResourceRegistry.hpp"
 #include "reaktio/foundation/Telemetry.hpp"
 #include "reaktio/gameplay/EventBus.hpp"
 #include "reaktio/gameplay/GameModeRegistry.hpp"
+#include "reaktio/gameplay/GameplayInput.hpp"
 #include "reaktio/gameplay/IModeHost.hpp"
 #include "reaktio/gameplay/ModeConfiguration.hpp"
+#include "reaktio/gameplay/ModeFlow.hpp"
+#include "reaktio/gameplay/Modifiers.hpp"
+#include "reaktio/gameplay/PresentationEvents.hpp"
 #include "reaktio/gameplay/ReplayRecorder.hpp"
+#include "reaktio/gameplay/SaveData.hpp"
 #include "reaktio/gameplay/WorldModel.hpp"
 #include "reaktio/platform/ApplicationConfig.hpp"
 #include "reaktio/platform/FrameClock.hpp"
@@ -43,7 +49,10 @@ struct SmokeApplicationDependencies {
     std::ostream* log_stream{};
     std::string configuration_source{"<defaults>"};
     platform::InputBindingsConfig input_bindings;
+    gameplay::InputActionMapStore input_action_maps;
     gameplay::ModeConfigurationStore mode_configuration;
+    gameplay::ModifierStore modifiers;
+    content::HotReloadConfig hot_reload;
 };
 
 class SmokeApplication final : public gameplay::IModeHost {
@@ -54,6 +63,9 @@ class SmokeApplication final : public gameplay::IModeHost {
 
     [[nodiscard]] const foundation::RuntimeBudget& runtime_budget() const noexcept override;
     [[nodiscard]] const platform::StackProbe& stack_probe() const noexcept override;
+    [[nodiscard]] const gameplay::ModeInputFrame& input() const noexcept override;
+    [[nodiscard]] const gameplay::InputActionMapStore& input_action_maps() const noexcept override;
+    [[nodiscard]] gameplay::InputActionMapStore& input_action_maps() noexcept override;
     [[nodiscard]] const platform::InputSnapshot& input_snapshot() const noexcept override;
     [[nodiscard]] const platform::InputBindingsConfig& input_bindings() const noexcept override;
     [[nodiscard]] const platform::FrameTiming& frame_timing() const noexcept override;
@@ -61,8 +73,13 @@ class SmokeApplication final : public gameplay::IModeHost {
     [[nodiscard]] foundation::DeterministicRandomService& random_service() noexcept override;
     [[nodiscard]] foundation::ResourceRegistry& resource_registry() noexcept override;
     [[nodiscard]] const gameplay::ModeConfigurationStore& mode_configuration() const noexcept override;
+    [[nodiscard]] const gameplay::ModifierStore& modifier_store() const noexcept override;
+    [[nodiscard]] const gameplay::ModifierSet& modifiers() const noexcept override;
     [[nodiscard]] gameplay::EventBus& event_bus() noexcept override;
+    [[nodiscard]] gameplay::PresentationEventBus& presentation_events() noexcept override;
+    [[nodiscard]] gameplay::ModeFlowController& flow() noexcept override;
     [[nodiscard]] gameplay::ReplayRecorder& replay() noexcept override;
+    [[nodiscard]] gameplay::SaveDataStore& save_data() noexcept override;
     [[nodiscard]] gameplay::WorldModel& world_model() noexcept override;
     [[nodiscard]] gameplay::ITransportControl& transport() noexcept override;
     [[nodiscard]] render::RenderExtractionContext& render_extraction() noexcept override;
@@ -80,12 +97,19 @@ class SmokeApplication final : public gameplay::IModeHost {
     foundation::DeterministicRandomService random_service_;
     foundation::ResourceRegistry resource_registry_;
     gameplay::EventBus event_bus_;
+    gameplay::PresentationEventBus presentation_event_bus_;
+    gameplay::ModeFlowController mode_flow_{};
+    gameplay::SaveDataStore save_data_store_{};
+    gameplay::InMemorySaveDataBackend save_data_backend_{};
+    gameplay::ModeInputFrame mode_input_frame_;
     gameplay::ReplayRecorder replay_recorder_;
     gameplay::WorldModel world_model_;
     render::RenderExtractionContext render_extraction_context_;
     foundation::CrashSafeLog crash_safe_log_;
     platform::SdlApplicationShell* active_shell_{};
     gameplay::ITransportControl* active_transport_{};
+    std::string active_mode_id_{};
+    std::uint64_t published_flow_transition_count_{};
 };
 
 } // namespace reaktio::app

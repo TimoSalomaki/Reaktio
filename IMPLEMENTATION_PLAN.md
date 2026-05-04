@@ -205,7 +205,7 @@ These are support libraries, not replacements for SDL or bgfx.
 - [x] Add texture, mesh, and font resource loading for cooked assets.
 - [x] Implement render extraction so gameplay produces render packets rather than calling bgfx directly.
 - [x] Add batch and instancing paths for large note counts and repeated obstacles.
-- [ ] Add a simple post-processing chain for color grading, bloom, vignette, and screen-space feedback.
+- [x] Add a simple post-processing chain for color grading, bloom, vignette, and screen-space feedback.
 - [x] Add debug visualizations for collision shapes, cue lanes, timing lines, and spawn windows.
 
 ### Phase 5 - Audio, Transport, and Rhythm Core
@@ -229,32 +229,32 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 6 - Content Model and Asset Pipeline
 
-- [ ] Define authoring schemas for charts, mode metadata, materials, fonts, and game configuration.
-- [ ] Create a chart data model that can represent note cues, holds, hazards, triggers, camera events, text prompts, and VFX events.
-- [ ] Create a content cooking pipeline that validates raw data and emits cooked runtime assets.
-- [ ] Add offline shader compilation for all supported bgfx backend profiles you intend to ship.
-- [ ] Add texture conversion and compression rules by target platform.
-- [ ] Add mesh import and preprocessing rules for 2.5D and 3D content.
-- [ ] Add font processing for UI text, gameplay glyphs, and localized typing content.
-- [ ] Add content manifests with hashes, versioning, and dependency metadata.
-- [ ] Build a lightweight chart preview tool that can scrub through time without full gameplay startup.
-- [ ] Add hot-reload hooks for charts, shaders, materials, and selected content during development.
-- [ ] Add command-line validators for charts, timing consistency, and missing assets.
+- [x] Define authoring schemas for charts, mode metadata, materials, fonts, and game configuration.
+- [x] Create a chart data model that can represent note cues, holds, hazards, triggers, camera events, text prompts, and VFX events.
+- [x] Create a content cooking pipeline that validates raw data and emits cooked runtime assets.
+- [x] Add offline shader compilation for all supported bgfx backend profiles you intend to ship.
+- [x] Add texture conversion and compression rules by target platform.
+- [x] Add mesh import and preprocessing rules for 2.5D and 3D content.
+- [x] Add font processing for UI text, gameplay glyphs, and localized typing content.
+- [x] Add content manifests with hashes, versioning, and dependency metadata.
+- [x] Build a lightweight chart preview tool that can scrub through time without full gameplay startup.
+- [x] Add hot-reload hooks for charts, shaders, materials, and selected content during development.
+- [x] Add command-line validators for charts, timing consistency, and missing assets.
 
 ### Phase 7 - Gameplay Framework and Mode Module Contract
 
-- [ ] Finalize the richer mode API after the slim reference mode has proven the workflow.
-- [ ] Separate input actions, text input, and analog controls into distinct gameplay-facing abstractions.
-- [ ] Implement action maps, input contexts, rebinding, and device-profile support.
-- [ ] Add a generic cue scheduler that spawns gameplay objects based on transport time and mode rules.
-- [ ] Add a scoring API with judgements, combo, multiplier, fail state, grade, and per-section statistics.
-- [ ] Add a generic modifiers system for speed mods, autoplay, no-fail, mirrored lanes, and practice assists.
-- [ ] Add camera-event, screen-effect, and haptics hooks that modes can trigger without depending directly on platform code.
-- [ ] Add pause, restart, fail, success, practice, and results flow contracts.
-- [ ] Add replay integration so every mode can record and deterministically re-run inputs.
-- [ ] Add a minimal replay inspection view for recorded input timelines and judgement offsets before building full authoring-grade tools.
-- [ ] Keep version 1 mode extensibility compile-time and source-level; defer a binary plugin ABI until at least two shipped mode families prove the need.
-- [ ] Add save-data contracts for unlocks, settings, and per-song or per-mode stats.
+- [x] Finalize the richer mode API after the slim reference mode has proven the workflow.
+- [x] Separate input actions, text input, and analog controls into distinct gameplay-facing abstractions.
+- [x] Implement action maps, input contexts, rebinding, and device-profile support.
+- [x] Add a generic cue scheduler that spawns gameplay objects based on transport time and mode rules.
+- [x] Add a scoring API with judgements, combo, multiplier, fail state, grade, and per-section statistics.
+- [x] Add a generic modifiers system for speed mods, autoplay, no-fail, mirrored lanes, and practice assists.
+- [x] Add camera-event, screen-effect, and haptics hooks that modes can trigger without depending directly on platform code.
+- [x] Add pause, restart, fail, success, practice, and results flow contracts.
+- [x] Add replay integration so every mode can record and deterministically re-run inputs.
+- [x] Add a minimal replay inspection view for recorded input timelines and judgement offsets before building full authoring-grade tools.
+- [x] Keep version 1 mode extensibility compile-time and source-level; defer a binary plugin ABI until at least two shipped mode families prove the need.
+- [x] Add save-data contracts for unlocks, settings, and per-song or per-mode stats.
 
 ### Phase 8 - Vertical Slice A: Typing and Falling-Character Mode
 

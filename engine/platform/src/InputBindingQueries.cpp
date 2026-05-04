@@ -159,6 +159,20 @@ InputActionState query_action_state(
     return state;
 }
 
+InputActionState query_binding_state(
+    const InputSnapshot& input_snapshot,
+    std::string_view primary,
+    std::string_view secondary) noexcept {
+    InputActionState state{};
+    if (!primary.empty()) {
+        merge_state(state, query_resolved_binding(input_snapshot, resolve_binding(primary)));
+    }
+    if (!secondary.empty()) {
+        merge_state(state, query_resolved_binding(input_snapshot, resolve_binding(secondary)));
+    }
+    return state;
+}
+
 bool is_action_down(
     const InputSnapshot& input_snapshot,
     const InputBindingsConfig& input_bindings,

@@ -106,10 +106,6 @@ std::string make_message(std::string_view prefix, std::string_view suffix) {
     return message;
 }
 
-[[nodiscard]] bool gpu_post_process_validation_enabled() noexcept {
-    return false;
-}
-
 bgfx::FrameBufferHandle create_color_render_target(std::uint16_t width, std::uint16_t height) {
     constexpr std::uint64_t k_texture_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
     return bgfx::createFrameBuffer(width, height, bgfx::TextureFormat::BGRA8, k_texture_flags);
@@ -190,13 +186,7 @@ struct PostProcessChain::Impl {
         }
 
         initialized = true;
-        const bool gpu_post_process_enabled = gpu_post_process_validation_enabled();
-        if (!config.enabled || bgfx::getRendererType() == bgfx::RendererType::Noop || !gpu_post_process_enabled) {
-            if (config.enabled && bgfx::getRendererType() != bgfx::RendererType::Noop && !gpu_post_process_enabled) {
-                log->write(
-                    foundation::LogLevel::Warning,
-                    "Renderer post-process chain remains disabled pending stable GPU backend validation.");
-            }
+        if (!config.enabled || bgfx::getRendererType() == bgfx::RendererType::Noop) {
             available = false;
             return true;
         }
@@ -341,13 +331,12 @@ struct PostProcessChain::Impl {
         const bgfx::TextureHandle feedback_read_texture = history_valid
             ? bgfx::getTexture(feedback_read_frame_buffer())
             : fallback_history_texture;
-        const bgfx::TextureHandle feedback_write_texture = bgfx::getTexture(feedback_write_frame_buffer());
-
+        const bgfx::TextureHandle composite_texture = bgfx::getTexture(feedback_write_frame_buffer());
         submit_bloom_extract(scene_texture);
         submit_blur_pass(RenderView::PostBloomBlurHorizontal, bloom_ping_texture, bloom_pong_frame_buffer, 1.0f, 0.0f);
         submit_blur_pass(RenderView::PostBloomBlurVertical, bloom_pong_texture, bloom_ping_frame_buffer, 0.0f, 1.0f);
         submit_composite(scene_texture, bloom_ping_texture, feedback_read_texture);
-        submit_present(feedback_write_texture);
+        submit_present(composite_texture);
 
         history_valid = true;
         read_feedback_a = !read_feedback_a;

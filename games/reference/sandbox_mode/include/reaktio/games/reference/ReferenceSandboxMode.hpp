@@ -1,7 +1,10 @@
 #pragma once
 
 #include "reaktio/foundation/ResourceRegistry.hpp"
+#include "reaktio/gameplay/CueScheduler.hpp"
 #include "reaktio/gameplay/IGameMode.hpp"
+#include "reaktio/gameplay/Modifiers.hpp"
+#include "reaktio/gameplay/Scoring.hpp"
 #include "reaktio/gameplay/MotionCollision.hpp"
 #include "reaktio/gameplay/Transforms.hpp"
 #include "reaktio/rhythm/CueTravelModel.hpp"
@@ -41,10 +44,11 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     [[nodiscard]] static const gameplay::ModeDescriptor& mode_descriptor() noexcept;
 
     [[nodiscard]] const gameplay::ModeDescriptor& descriptor() const noexcept override;
-    void on_enter(gameplay::IModeHost& host) override;
-    void on_fixed_step(gameplay::IModeHost& host, double fixed_delta_seconds) override;
-    void on_render_extract(gameplay::IModeHost& host, double interpolation_alpha) override;
-    void on_exit(gameplay::IModeHost& host) override;
+    void on_enter(gameplay::IModeHost& host, const gameplay::ModeEnterContext& context) override;
+    void on_frame_begin(gameplay::IModeHost& host, const gameplay::ModeFrameContext& context) override;
+    void on_fixed_step(gameplay::IModeHost& host, const gameplay::ModeFixedStepContext& context) override;
+    void on_render_extract(gameplay::IModeHost& host, const gameplay::ModeRenderContext& context) override;
+    void on_exit(gameplay::IModeHost& host, const gameplay::ModeExitContext& context) override;
 
   private:
     std::uint64_t fixed_steps_{};
@@ -93,8 +97,15 @@ class ReferenceSandboxMode final : public gameplay::IGameMode {
     rhythm::RhythmPosition rhythm_position_{};
     std::string rhythm_status_{"tempo-map=uninitialized"};
     std::vector<rhythm::ScheduledCue> scheduled_cues_{};
+    gameplay::CueScheduler cue_scheduler_{};
+    gameplay::CueSchedulerSummary cue_scheduler_summary_{};
+    gameplay::ScoreTracker score_tracker_{};
+    gameplay::ScoreSummary score_summary_{};
+    std::vector<std::size_t> scored_schedule_indices_{};
     rhythm::TimingWindowSet judgement_window_set_{};
     rhythm::TimingOffsetProfile judgement_offset_profile_{};
+    gameplay::ModifierSet modifier_snapshot_{};
+    std::uint64_t modifier_signature_{};
     double practice_scroll_speed_multiplier_{1.0};
     bool practice_offset_visualization_enabled_{true};
     double practice_loop_marker_start_seconds_{};

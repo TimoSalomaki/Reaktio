@@ -18,24 +18,60 @@ namespace reaktio::render {
 
 enum class CookedTextureFormat : std::uint8_t {
     Rgba8,
+    Bc1,
+    Bc3,
+    Bc5,
+};
+
+enum class CookedTextureStorage : std::uint8_t {
+    InlineRgba8,
+    Dds,
+    Ktx,
+};
+
+enum class CookedMeshStorage : std::uint8_t {
+    InlineLists,
+    BgfxGeometry,
+};
+
+enum class CookedFontAtlasStorage : std::uint8_t {
+    None,
+    RawR8,
 };
 
 struct TextureAssetRecord {
     foundation::ResourceHandle resource{};
     std::string authoring_id;
     std::string runtime_label;
-    std::filesystem::path payload_path;
+    std::filesystem::path metadata_path;
+    std::filesystem::path data_path;
+    CookedTextureStorage storage{CookedTextureStorage::InlineRgba8};
     CookedTextureFormat format{CookedTextureFormat::Rgba8};
     std::uint16_t width{};
     std::uint16_t height{};
-    std::vector<std::uint8_t> pixel_bytes;
+    bool srgb{true};
+    bool generate_mips{};
+    std::vector<std::uint8_t> payload_bytes;
 };
 
 struct MeshAssetRecord {
     foundation::ResourceHandle resource{};
     std::string authoring_id;
     std::string runtime_label;
-    std::filesystem::path payload_path;
+    std::filesystem::path metadata_path;
+    std::filesystem::path data_path;
+    CookedMeshStorage storage{CookedMeshStorage::InlineLists};
+    std::string source_format;
+    float scale{1.0f};
+    bool compressed{};
+    bool flip_v{};
+    bool ccw{};
+    std::uint8_t pack_normals{};
+    std::uint8_t pack_uv{};
+    bool generate_tangents{};
+    bool barycentric{};
+    std::string coordinate_system;
+    std::vector<std::uint8_t> payload_bytes;
     std::vector<std::array<float, 3>> positions;
     std::vector<std::uint16_t> indices;
 };
@@ -45,6 +81,8 @@ struct FontGlyphRecord {
     float advance{};
     float bearing_x{};
     float bearing_y{};
+    float width{};
+    float height{};
     std::array<float, 4> uv_rect{};
 };
 
@@ -52,10 +90,20 @@ struct FontAssetRecord {
     foundation::ResourceHandle resource{};
     std::string authoring_id;
     std::string runtime_label;
-    std::filesystem::path payload_path;
+    std::filesystem::path metadata_path;
+    std::filesystem::path atlas_path;
+    CookedFontAtlasStorage atlas_storage{CookedFontAtlasStorage::None};
+    float pixel_height{};
     float line_height{};
     std::uint16_t atlas_width{};
     std::uint16_t atlas_height{};
+    float line_spacing{1.0f};
+    float ascent{};
+    float descent{};
+    float line_gap{};
+    bool sdf{};
+    std::vector<std::string> fallback_ids;
+    std::vector<std::uint8_t> atlas_bytes;
     std::vector<FontGlyphRecord> glyphs;
 };
 
@@ -73,6 +121,10 @@ class CookedAssetLibrary {
     [[nodiscard]] bool load(
         foundation::ResourceRegistry& resource_registry,
         foundation::CrashSafeLog& log);
+        [[nodiscard]] bool load(
+                const std::filesystem::path& manifest_path,
+                foundation::ResourceRegistry& resource_registry,
+                foundation::CrashSafeLog& log);
     void clear() noexcept;
 
     [[nodiscard]] const TextureAssetRecord* try_get_texture(foundation::ResourceHandle resource) const noexcept;

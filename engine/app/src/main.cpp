@@ -49,7 +49,10 @@ int main() {
         &std::cout,
         config_result.loaded_from_file ? config_result.source_path.string() : std::string("<defaults>"),
         std::move(runtime_configuration.input_bindings),
+        std::move(runtime_configuration.input_action_maps),
         std::move(runtime_configuration.mode_configuration),
+        std::move(runtime_configuration.modifiers),
+        std::move(runtime_configuration.hot_reload),
     };
 
     reaktio::app::SmokeApplication application{std::move(dependencies)};

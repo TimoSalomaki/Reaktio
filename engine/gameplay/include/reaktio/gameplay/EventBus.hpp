@@ -1,6 +1,10 @@
 #pragma once
 
+#include "reaktio/gameplay/IGameMode.hpp"
+#include "reaktio/gameplay/ModeFlow.hpp"
 #include "reaktio/gameplay/Transport.hpp"
+
+#include "reaktio/content/HotReload.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +25,8 @@ enum class ModeLifecyclePhase {
 struct ModeLifecycleEvent {
     std::string mode_id;
     ModeLifecyclePhase phase{ModeLifecyclePhase::Entered};
+    ModeLifecycleReason reason{ModeLifecycleReason::Startup};
+    std::uint32_t api_version{};
 };
 
 struct TransportEvent {
@@ -46,7 +52,32 @@ struct DiagnosticEvent {
     std::string message;
 };
 
-using EventPayload = std::variant<ModeLifecycleEvent, TransportEvent, ReplayCheckpointEvent, DiagnosticEvent>;
+enum class ContentHotReloadStatus : std::uint8_t {
+    Reloaded,
+    Pending,
+    Failed,
+};
+
+struct ContentHotReloadEvent {
+    content::HotReloadAssetFamily family{content::HotReloadAssetFamily::Charts};
+    ContentHotReloadStatus status{ContentHotReloadStatus::Reloaded};
+    std::filesystem::path trigger_path;
+    std::size_t changed_file_count{};
+    std::uint64_t revision{};
+    std::string detail;
+};
+
+struct ModeFlowEvent {
+    ModeFlowTransition transition{ModeFlowTransition::Begin};
+    ModeFlowState from{ModeFlowState::Idle};
+    ModeFlowState to{ModeFlowState::Idle};
+    ModeFlowReason reason{ModeFlowReason::None};
+    bool practice_active{};
+    bool no_fail_active{};
+    bool autoplay_active{};
+};
+
+using EventPayload = std::variant<ModeLifecycleEvent, TransportEvent, ReplayCheckpointEvent, DiagnosticEvent, ContentHotReloadEvent, ModeFlowEvent>;
 
 struct EventRecord {
     std::uint64_t sequence{};
@@ -93,5 +124,18 @@ class EventBus {
 }
 
 [[nodiscard]] std::string describe_event(const EventRecord& event);
+
+[[nodiscard]] constexpr std::string_view to_string(ContentHotReloadStatus status) noexcept {
+    switch (status) {
+    case ContentHotReloadStatus::Reloaded:
+        return "reloaded";
+    case ContentHotReloadStatus::Pending:
+        return "pending";
+    case ContentHotReloadStatus::Failed:
+        return "failed";
+    }
+
+    return "unknown";
+}
 
 } // namespace reaktio::gameplay

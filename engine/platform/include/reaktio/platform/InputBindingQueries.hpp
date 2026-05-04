@@ -17,6 +17,10 @@ struct InputActionState {
     const InputSnapshot& input_snapshot,
     const InputBindingsConfig& input_bindings,
     std::string_view action_id) noexcept;
+[[nodiscard]] InputActionState query_binding_state(
+    const InputSnapshot& input_snapshot,
+    std::string_view primary,
+    std::string_view secondary = {}) noexcept;
 [[nodiscard]] bool is_action_down(
     const InputSnapshot& input_snapshot,
     const InputBindingsConfig& input_bindings,

@@ -53,7 +53,9 @@ std::string describe_event(const EventRecord& event) {
             stream << event.source << '#';
 
             if constexpr (std::is_same_v<PayloadType, ModeLifecycleEvent>) {
-                stream << "mode:" << payload.mode_id << ' ' << to_string(payload.phase);
+                stream << "mode:" << payload.mode_id << ' ' << to_string(payload.phase)
+                       << " reason=" << to_string(payload.reason)
+                       << " api=" << payload.api_version;
             } else if constexpr (std::is_same_v<PayloadType, TransportEvent>) {
                 stream << "transport:" << payload.action << ' ' << to_string(payload.playback_state)
                        << '/' << to_string(payload.playback_mode)
@@ -66,6 +68,24 @@ std::string describe_event(const EventRecord& event) {
                 stream << "replay:" << payload.label << " step=" << payload.simulation_step
                        << " checkpoints=" << payload.checkpoint_count << " hash=0x" << std::hex
                        << payload.authoritative_state_hash;
+            } else if constexpr (std::is_same_v<PayloadType, ContentHotReloadEvent>) {
+                stream << "hot-reload:" << content::to_string(payload.family)
+                       << ' ' << to_string(payload.status)
+                       << " changes=" << payload.changed_file_count
+                       << " rev=" << payload.revision;
+                if (!payload.trigger_path.empty()) {
+                    stream << " path=" << payload.trigger_path.string();
+                }
+                if (!payload.detail.empty()) {
+                    stream << " detail=" << payload.detail;
+                }
+            } else if constexpr (std::is_same_v<PayloadType, ModeFlowEvent>) {
+                stream << "flow:" << to_string(payload.transition)
+                       << ' ' << to_string(payload.from) << "->" << to_string(payload.to)
+                       << " reason=" << to_string(payload.reason)
+                       << " practice=" << payload.practice_active
+                       << " no-fail=" << payload.no_fail_active
+                       << " autoplay=" << payload.autoplay_active;
             } else {
                 stream << "diagnostic:" << payload.message;
             }

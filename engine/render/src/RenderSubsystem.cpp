@@ -500,6 +500,23 @@ struct RenderSubsystem::Impl {
         return true;
     }
 
+    bool load_cooked_assets(const std::filesystem::path& manifest_path, foundation::ResourceRegistry& resource_registry) {
+        if (!cooked_assets.load(manifest_path, resource_registry, *log)) {
+            return false;
+        }
+
+        const CookedAssetLibrarySummary& summary = cooked_assets.summary();
+        stats.loaded_textures = static_cast<std::uint32_t>(summary.texture_count);
+        stats.loaded_meshes = static_cast<std::uint32_t>(summary.mesh_count);
+        stats.loaded_fonts = static_cast<std::uint32_t>(summary.font_count);
+        stats.loaded_asset_bytes = summary.total_payload_bytes;
+        cooked_asset_source_storage = summary.loaded_from_manifest
+            ? summary.manifest_path.string()
+            : std::string("<none>");
+        stats.cooked_asset_source = cooked_asset_source_storage;
+        return true;
+    }
+
     void submit_extracted_frame(const RenderFramePackets& packets) noexcept {
         if (!stats.initialized) {
             return;
@@ -825,6 +842,12 @@ bool RenderSubsystem::initialize(const platform::WindowState& window_state) {
 
 bool RenderSubsystem::load_cooked_assets(foundation::ResourceRegistry& resource_registry) {
     return impl_->load_cooked_assets(resource_registry);
+}
+
+bool RenderSubsystem::load_cooked_assets(
+    const std::filesystem::path& manifest_path,
+    foundation::ResourceRegistry& resource_registry) {
+    return impl_->load_cooked_assets(manifest_path, resource_registry);
 }
 
 void RenderSubsystem::begin_frame(const platform::WindowState& window_state) {

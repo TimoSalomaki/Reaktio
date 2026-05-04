@@ -23,6 +23,10 @@ include(ReaktioSanitizers)
 include(ReaktioStaticAnalysis)
 include(ReaktioDependencies)
 include(ReaktioDevTargets)
+include(ReaktioShaderCooking)
+include(ReaktioTextureCooking)
+include(ReaktioMeshCooking)
+include(ReaktioFontCooking)
 
 reaktio_configure_dependencies()
 include(${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/cmake/bgfxToolUtils.cmake)
@@ -54,6 +58,14 @@ endif()
 set(REAKTIO_GENERATED_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 set(REAKTIO_POST_PROCESS_SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/render/shaders")
 set(REAKTIO_BGFX_SHADER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/bgfx/src")
+set(REAKTIO_RAW_SHADER_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/raw/render/shaders")
+set(REAKTIO_COOKED_SHADER_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/cooked/render/shaders")
+set(REAKTIO_RAW_TEXTURE_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/raw/render/textures")
+set(REAKTIO_COOKED_TEXTURE_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/cooked/render/textures")
+set(REAKTIO_RAW_MESH_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/raw/render/meshes")
+set(REAKTIO_COOKED_MESH_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/cooked/render/meshes")
+set(REAKTIO_RAW_FONT_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/raw/render/fonts")
+set(REAKTIO_COOKED_FONT_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/content/cooked/render/fonts")
 
 bgfx_compile_shaders(
     TYPE VERTEX
@@ -87,6 +99,26 @@ set(REAKTIO_POST_PROCESS_SHADER_HEADERS
 add_custom_target(
     reaktio_render_postprocess_shaders
     DEPENDS ${REAKTIO_POST_PROCESS_SHADER_HEADERS}
+)
+
+reaktio_cook_shader_manifest(
+    MANIFEST_FILE "${REAKTIO_RAW_SHADER_ASSET_DIR}/manifest.ini"
+    COOKED_ROOT "${REAKTIO_COOKED_SHADER_ASSET_DIR}"
+    OUTPUT_MANIFEST "${REAKTIO_COOKED_SHADER_ASSET_DIR}/manifest.ini"
+    GLOBAL_INCLUDE_DIRS_VALUE "${REAKTIO_BGFX_SHADER_INCLUDE_DIR}"
+    TARGET_NAME reaktio_cook_render_shaders
+)
+
+reaktio_cook_texture_manifest(
+    MANIFEST_FILE "${REAKTIO_RAW_TEXTURE_ASSET_DIR}/manifest.ini"
+    COOKED_ROOT "${REAKTIO_COOKED_TEXTURE_ASSET_DIR}"
+    TARGET_NAME reaktio_cook_render_textures
+)
+
+reaktio_cook_mesh_manifest(
+    MANIFEST_FILE "${REAKTIO_RAW_MESH_ASSET_DIR}/manifest.ini"
+    COOKED_ROOT "${REAKTIO_COOKED_MESH_ASSET_DIR}"
+    TARGET_NAME reaktio_cook_render_meshes
 )
 
 function(reaktio_configure_target target_name)
@@ -154,13 +186,85 @@ target_include_directories(reaktio_audio
 target_link_libraries(reaktio_audio PUBLIC Reaktio::foundation SDL3::SDL3)
 reaktio_configure_target(reaktio_audio)
 
+add_library(reaktio_content STATIC
+    engine/content/src/ContentPipeline.cpp
+    engine/content/src/ChartDataModel.cpp
+    engine/content/src/ChartPreview.cpp
+    engine/content/src/CookedChartLibrary.cpp
+    engine/content/src/HotReload.cpp
+)
+add_library(Reaktio::content ALIAS reaktio_content)
+target_include_directories(reaktio_content
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/content/include"
+)
+target_link_libraries(reaktio_content PUBLIC Reaktio::foundation Reaktio::rhythm)
+reaktio_configure_target(reaktio_content)
+
+add_executable(reaktio_content_cooker
+    tools/content_cooker.cpp
+)
+target_link_libraries(reaktio_content_cooker PRIVATE Reaktio::content Reaktio::foundation)
+reaktio_configure_target(reaktio_content_cooker)
+
+add_executable(reaktio_content_validator
+    tools/content_validator.cpp
+)
+target_link_libraries(reaktio_content_validator PRIVATE Reaktio::content Reaktio::foundation)
+reaktio_configure_target(reaktio_content_validator)
+
+add_executable(reaktio_chart_preview
+    tools/chart_preview.cpp
+)
+target_link_libraries(reaktio_chart_preview PRIVATE Reaktio::content Reaktio::rhythm)
+reaktio_configure_target(reaktio_chart_preview)
+
+add_executable(reaktio_font_cooker
+    tools/font_cooker.cpp
+)
+target_include_directories(reaktio_font_cooker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/external/bgfx.cmake/bgfx/3rdparty/stb")
+reaktio_configure_target(reaktio_font_cooker)
+
+reaktio_cook_font_manifest(
+    MANIFEST_FILE "${REAKTIO_RAW_FONT_ASSET_DIR}/manifest.ini"
+    COOKED_ROOT "${REAKTIO_COOKED_FONT_ASSET_DIR}"
+    TOOL_TARGET reaktio_font_cooker
+    TARGET_NAME reaktio_cook_render_fonts
+)
+
+add_custom_target(
+    reaktio_cook_content_assets
+    COMMAND $<TARGET_FILE:reaktio_content_cooker>
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS reaktio_content_cooker reaktio_cook_render_shaders reaktio_cook_render_textures reaktio_cook_render_meshes reaktio_cook_render_fonts
+    USES_TERMINAL
+)
+
+add_custom_target(
+    reaktio_validate_content_assets
+    COMMAND $<TARGET_FILE:reaktio_content_validator>
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS reaktio_content_validator
+    USES_TERMINAL
+)
+
 add_library(reaktio_gameplay STATIC
+    engine/gameplay/src/CueScheduler.cpp
     engine/gameplay/src/DebugVisualizations.cpp
     engine/gameplay/src/EventBus.cpp
     engine/gameplay/src/GameModeRegistry.cpp
+    engine/gameplay/src/GameplayInput.cpp
+    engine/gameplay/src/IGameMode.cpp
     engine/gameplay/src/ModeConfiguration.cpp
+    engine/gameplay/src/ModeFlow.cpp
+    engine/gameplay/src/Modifiers.cpp
     engine/gameplay/src/MotionCollision.cpp
+    engine/gameplay/src/PresentationEvents.cpp
+    engine/gameplay/src/ReplayInspection.cpp
+    engine/gameplay/src/ReplayPlayback.cpp
     engine/gameplay/src/ReplayRecorder.cpp
+    engine/gameplay/src/SaveData.cpp
+    engine/gameplay/src/Scoring.cpp
     engine/gameplay/src/Transforms.cpp
     engine/gameplay/src/TransportController.cpp
     engine/gameplay/src/WorldModel.cpp
@@ -171,6 +275,7 @@ target_include_directories(reaktio_gameplay
         "${CMAKE_CURRENT_SOURCE_DIR}/engine/gameplay/include"
 )
 target_link_libraries(reaktio_gameplay PUBLIC Reaktio::entt Reaktio::foundation Reaktio::platform_api Reaktio::render_api)
+target_link_libraries(reaktio_gameplay PUBLIC Reaktio::content)
 reaktio_configure_target(reaktio_gameplay)
 
 add_library(reaktio_platform STATIC
@@ -253,6 +358,7 @@ reaktio_configure_target(reaktio_reference_sandbox_mode)
 
 add_library(reaktio_app STATIC
     engine/app/src/AuthoritativeAudioTransport.cpp
+    engine/app/src/ContentHotReloadController.cpp
     engine/app/src/RuntimeConfiguration.cpp
     engine/app/src/SmokeApplication.cpp
     engine/app/src/TransportAlignmentTracker.cpp
@@ -266,6 +372,7 @@ target_include_directories(reaktio_app
 target_link_libraries(reaktio_app
     PUBLIC
         Reaktio::audio
+        Reaktio::content
         Reaktio::foundation
         Reaktio::gameplay
         Reaktio::platform

@@ -67,7 +67,7 @@ struct DebugOptions {
 };
 
 struct PostProcessConfig {
-    bool enabled{false};
+    bool enabled{true};
     float bloom_threshold{0.72f};
     float bloom_intensity{0.35f};
     float bloom_blur_scale{1.0f};

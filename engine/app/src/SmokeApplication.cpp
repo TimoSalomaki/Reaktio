@@ -1,8 +1,14 @@
+#include "reaktio/app/ContentHotReloadController.hpp"
 #include "reaktio/app/SmokeApplication.hpp"
+
+#include "reaktio/gameplay/ReplayInspection.hpp"
+#include "reaktio/gameplay/ReplayPlayback.hpp"
 
 #include "reaktio/app/AuthoritativeAudioTransport.hpp"
 #include "reaktio/audio/AudioClipLibrary.hpp"
+#include "reaktio/content/CookedChartLibrary.hpp"
 #include "reaktio/foundation/BuildInfo.hpp"
+#include "reaktio/platform/InputBindingQueries.hpp"
 #include "reaktio/platform/SdlAudioDevice.hpp"
 #include "reaktio/render/RenderSubsystem.hpp"
 #include "reaktio/platform/SdlApplicationShell.hpp"
@@ -13,8 +19,10 @@
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace {
 
@@ -22,6 +30,93 @@ double milliseconds_between(
     const std::chrono::steady_clock::time_point& start,
     const std::chrono::steady_clock::time_point& end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+float normalize_axis_value(std::int16_t value) noexcept {
+    if (value >= 0) {
+        return static_cast<float>(value) / static_cast<float>(std::numeric_limits<std::int16_t>::max());
+    }
+    return static_cast<float>(value) / -static_cast<float>(std::numeric_limits<std::int16_t>::min());
+}
+
+void rebuild_mode_input_frame(
+    reaktio::gameplay::ModeInputFrame& mode_input_frame,
+    const reaktio::platform::InputSnapshot& input_snapshot,
+    const reaktio::gameplay::InputActionMapStore& input_action_maps) {
+    mode_input_frame.clear();
+
+    reaktio::gameplay::ActionInputSurface& actions = mode_input_frame.mutable_actions();
+    for (const reaktio::gameplay::InputActionBinding& binding : input_action_maps.bindings()) {
+        if (!input_action_maps.is_context_active(binding.context_id) ||
+            binding.device_profile_id != input_action_maps.active_device_profile()) {
+            continue;
+        }
+
+        const reaktio::platform::InputActionState state = reaktio::platform::query_binding_state(
+            input_snapshot,
+            binding.primary,
+            binding.secondary);
+        actions.set_action_state(reaktio::gameplay::InputActionState{
+            .context_id = binding.context_id,
+            .action_id = binding.action_id,
+            .down = state.down,
+            .pressed = state.pressed,
+            .released = state.released,
+        });
+    }
+
+    reaktio::gameplay::TextInputSurface& text = mode_input_frame.mutable_text();
+    for (const reaktio::platform::TextInputEvent& event : input_snapshot.text_input_events()) {
+        text.add_text_event(reaktio::gameplay::TextInputEvent{
+            .timestamp_ns = event.timestamp_ns,
+            .text = event.text,
+        });
+    }
+
+    reaktio::gameplay::TextCompositionState composition{
+        .text = input_snapshot.composition_text(),
+        .start = input_snapshot.composition_start(),
+        .length = input_snapshot.composition_length(),
+    };
+    if (!input_snapshot.text_editing_candidates_events().empty()) {
+        const reaktio::platform::TextEditingCandidatesEvent& candidates =
+            input_snapshot.text_editing_candidates_events().back();
+        composition.candidates = candidates.candidates;
+        composition.selected_candidate = candidates.selected_candidate;
+        composition.candidates_horizontal = candidates.horizontal;
+    }
+    text.set_composition(std::move(composition));
+
+    float pointer_delta_x = 0.0f;
+    float pointer_delta_y = 0.0f;
+    for (const reaktio::platform::MouseMotionEvent& event : input_snapshot.mouse_motion_events()) {
+        pointer_delta_x += event.delta_x;
+        pointer_delta_y += event.delta_y;
+    }
+
+    reaktio::gameplay::AnalogInputSurface& analog = mode_input_frame.mutable_analog();
+    analog.set_pointer(reaktio::gameplay::PointerAnalogState{
+        .x = input_snapshot.mouse_x(),
+        .y = input_snapshot.mouse_y(),
+        .delta_x = pointer_delta_x,
+        .delta_y = pointer_delta_y,
+        .wheel_x = input_snapshot.mouse_wheel_x(),
+        .wheel_y = input_snapshot.mouse_wheel_y(),
+        .wheel_ticks_x = input_snapshot.mouse_wheel_ticks_x(),
+        .wheel_ticks_y = input_snapshot.mouse_wheel_ticks_y(),
+        .button_mask = input_snapshot.mouse_button_mask(),
+        .moved = !input_snapshot.mouse_motion_events().empty(),
+        .wheeled = !input_snapshot.mouse_wheel_events().empty(),
+    });
+    analog.set_connected_gamepad_count(input_snapshot.connected_gamepads().size());
+    for (const reaktio::platform::GamepadAxisEvent& event : input_snapshot.gamepad_axis_events()) {
+        analog.add_axis(reaktio::gameplay::AnalogAxisState{
+            .device_id = event.instance_id,
+            .axis = event.axis,
+            .raw_value = event.value,
+            .normalized_value = normalize_axis_value(event.value),
+        });
+    }
 }
 
 } // namespace
@@ -142,6 +237,20 @@ int SmokeApplication::run() {
         return 1;
     }
 
+    content::CookedChartLibrary cooked_chart_library;
+    if (!cooked_chart_library.load(crash_safe_log_)) {
+        crash_safe_log_.write(
+            foundation::LogLevel::Warning,
+            "Failed to load cooked chart library at startup; continuing with hot-reload hooks only.");
+    }
+
+    ContentHotReloadController hot_reload_controller{dependencies_.hot_reload};
+    if (!hot_reload_controller.initialize(crash_safe_log_)) {
+        crash_safe_log_.write(
+            foundation::LogLevel::Warning,
+            "Content hot reload could not be initialized; continuing without development reload hooks.");
+    }
+
     if (dependencies_.application_config.debug.enable_startup_diagnostics) {
         std::ostringstream asset_stream;
         asset_stream << "  cooked assets: textures=" << render_subsystem.stats().loaded_textures
@@ -161,6 +270,27 @@ int SmokeApplication::run() {
                            << " source="
                            << (audio_summary.manifest_path.empty() ? std::string("<none>") : audio_summary.manifest_path.string());
         crash_safe_log_.write(foundation::LogLevel::Info, audio_asset_stream.str());
+
+        const content::CookedChartLibrarySummary& chart_summary = cooked_chart_library.summary();
+        std::ostringstream chart_stream;
+        chart_stream << "  cooked charts: count=" << chart_summary.chart_count
+                     << " events=" << chart_summary.total_event_count
+                     << " interactive=" << chart_summary.total_interactive_cue_count
+                     << " source="
+                     << (chart_summary.manifest_path.empty() ? std::string("<none>") : chart_summary.manifest_path.string());
+        crash_safe_log_.write(foundation::LogLevel::Info, chart_stream.str());
+
+        if (hot_reload_controller.summary().enabled) {
+            const content::HotReloadWatcherSummary& watcher_summary = hot_reload_controller.watcher_summary();
+            std::ostringstream hot_reload_stream;
+            hot_reload_stream << "  hot reload: rev=" << watcher_summary.revision
+                              << " charts=" << watcher_summary.watched_chart_file_count
+                              << " shaders=" << watcher_summary.watched_shader_file_count
+                              << " materials=" << watcher_summary.watched_material_file_count
+                              << " selected=" << watcher_summary.watched_selected_content_file_count
+                              << " poll=" << hot_reload_controller.config().poll_interval_seconds << 's';
+            crash_safe_log_.write(foundation::LogLevel::Info, hot_reload_stream.str());
+        }
     }
 
     AuthoritativeAudioTransport transport;
@@ -179,8 +309,16 @@ int SmokeApplication::run() {
     }
 
     active_transport_ = &transport;
+    active_mode_id_ = std::string(mode->descriptor().id);
 
     event_bus_.reset();
+    presentation_event_bus_.reset();
+    mode_flow_.reset();
+    mode_flow_.set_clock(0, frame_timing().frame_index);
+    mode_flow_.update_modifier_flags(
+        dependencies_.modifiers.view(active_mode_id_).no_fail_enabled(),
+        dependencies_.modifiers.view(active_mode_id_).autoplay_enabled());
+    published_flow_transition_count_ = 0;
     world_model_.reset();
     replay_recorder_.begin_session(gameplay::ReplaySessionMetadata{
         .mode_id = std::string(mode->descriptor().id),
@@ -188,27 +326,60 @@ int SmokeApplication::run() {
         .root_random_seed = random_service_.root_seed(),
     });
 
+    {
+        gameplay::SaveDataDocument loaded{};
+        std::string save_data_error;
+        if (!save_data_backend_.load(loaded, &save_data_error)) {
+            crash_safe_log_.write(
+                foundation::LogLevel::Warning,
+                "Save data load failed: " + save_data_error);
+            save_data_store_.reset(gameplay::SaveDataMetadata{});
+        } else {
+            save_data_store_.load_document(std::move(loaded));
+        }
+    }
+
+    std::uint64_t fixed_step_index = 0;
+    const gameplay::ModeEnterContext enter_context{
+        .reason = gameplay::ModeLifecycleReason::Startup,
+        .frame_index = frame_timing().frame_index,
+        .fixed_step_index = fixed_step_index,
+    };
+
     event_bus_.publish(
         "app.smoke",
-        frame_timing().frame_index,
-        0,
+        enter_context.frame_index,
+        enter_context.fixed_step_index,
         gameplay::ModeLifecycleEvent{
             .mode_id = std::string(mode->descriptor().id),
             .phase = gameplay::ModeLifecyclePhase::Entering,
+            .reason = enter_context.reason,
+            .api_version = mode->descriptor().api_version,
         });
-    mode->on_enter(*this);
+    mode->on_enter(*this, enter_context);
     event_bus_.publish(
         "app.smoke",
-        frame_timing().frame_index,
-        0,
+        enter_context.frame_index,
+        enter_context.fixed_step_index,
         gameplay::ModeLifecycleEvent{
             .mode_id = std::string(mode->descriptor().id),
             .phase = gameplay::ModeLifecyclePhase::Entered,
+            .reason = enter_context.reason,
+            .api_version = mode->descriptor().api_version,
         });
 
     bool render_validation_logged = false;
     while (!platform_shell.should_quit()) {
         platform_shell.begin_frame();
+        hot_reload_controller.tick(
+            platform_shell.frame_timing().frame_delta_seconds,
+            platform_shell.frame_timing().frame_index,
+            0,
+            resource_registry_,
+            render_subsystem,
+            cooked_chart_library,
+            event_bus_,
+            crash_safe_log_);
         render_subsystem.begin_frame(platform_shell.window_state());
         if (!render_validation_logged && dependencies_.application_config.debug.enable_startup_diagnostics) {
             const render::RenderStats& render_stats = render_subsystem.stats();
@@ -228,12 +399,30 @@ int SmokeApplication::run() {
 
         platform_shell.pump_events();
         replay_recorder_.record_input_frame(platform_shell.frame_timing(), platform_shell.input_snapshot());
+        rebuild_mode_input_frame(mode_input_frame_, platform_shell.input_snapshot(), dependencies_.input_action_maps);
+
+        mode->on_frame_begin(
+            *this,
+            gameplay::ModeFrameContext{
+                .frame_index = platform_shell.frame_timing().frame_index,
+                .fixed_step_index = fixed_step_index,
+                .frame_delta_seconds = platform_shell.frame_timing().frame_delta_seconds,
+                .interpolation_alpha = platform_shell.frame_timing().interpolation_alpha,
+            });
 
         double simulation_ms = 0.0;
         while (platform_shell.frame_clock().should_run_fixed_step()) {
             const auto simulation_start = std::chrono::steady_clock::now();
+            ++fixed_step_index;
+            mode_flow_.set_clock(fixed_step_index, platform_shell.frame_timing().frame_index);
             transport.tick(platform_shell.frame_timing().fixed_step_seconds);
-            mode->on_fixed_step(*this, platform_shell.frame_timing().fixed_step_seconds);
+            mode->on_fixed_step(
+                *this,
+                gameplay::ModeFixedStepContext{
+                    .frame_index = platform_shell.frame_timing().frame_index,
+                    .fixed_step_index = fixed_step_index,
+                    .fixed_delta_seconds = platform_shell.frame_timing().fixed_step_seconds,
+                });
             const auto simulation_end = std::chrono::steady_clock::now();
             simulation_ms += milliseconds_between(simulation_start, simulation_end);
             platform_shell.frame_clock().consume_fixed_step();
@@ -248,7 +437,13 @@ int SmokeApplication::run() {
         foundation::TelemetrySnapshot* frame_snapshot = telemetry_recorder_.last_mutable();
 
         const auto render_extract_start = std::chrono::steady_clock::now();
-        mode->on_render_extract(*this, platform_shell.frame_timing().interpolation_alpha);
+        mode->on_render_extract(
+            *this,
+            gameplay::ModeRenderContext{
+                .frame_index = platform_shell.frame_timing().frame_index,
+                .fixed_step_index = fixed_step_index,
+                .interpolation_alpha = platform_shell.frame_timing().interpolation_alpha,
+            });
         render_subsystem.submit_extracted_frame(render_extraction_context_.packets());
         render_subsystem.draw_debug_overlay(
             platform_shell.frame_timing(),
@@ -256,6 +451,27 @@ int SmokeApplication::run() {
             frame_snapshot);
         render_subsystem.end_frame();
         platform_shell.present();
+        presentation_event_bus_.clear();
+
+        if (mode_flow_.snapshot().transition_count != published_flow_transition_count_) {
+            if (const gameplay::ModeFlowTransitionRecord* transition = mode_flow_.last_transition()) {
+                const gameplay::ModeFlowSnapshot& flow_snapshot = mode_flow_.snapshot();
+                event_bus_.publish(
+                    "app.smoke",
+                    transition->frame_index,
+                    transition->simulation_step,
+                    gameplay::ModeFlowEvent{
+                        .transition = transition->transition,
+                        .from = transition->from,
+                        .to = transition->to,
+                        .reason = transition->reason,
+                        .practice_active = flow_snapshot.flags.practice_active,
+                        .no_fail_active = flow_snapshot.flags.no_fail_active,
+                        .autoplay_active = flow_snapshot.flags.autoplay_active,
+                    });
+            }
+            published_flow_transition_count_ = mode_flow_.snapshot().transition_count;
+        }
         const auto render_extract_end = std::chrono::steady_clock::now();
 
         if (frame_snapshot != nullptr) {
@@ -287,23 +503,32 @@ int SmokeApplication::run() {
     const TransportDrivenAudioSnapshot final_clip_snapshot = had_audio_authority
         ? transport.clip_snapshot()
         : TransportDrivenAudioSnapshot{};
+    const gameplay::ModeExitContext exit_context{
+        .reason = gameplay::ModeLifecycleReason::Shutdown,
+        .frame_index = frame_timing().frame_index,
+        .fixed_step_index = fixed_step_index,
+    };
 
     event_bus_.publish(
         "app.smoke",
-        frame_timing().frame_index,
-        0,
+        exit_context.frame_index,
+        exit_context.fixed_step_index,
         gameplay::ModeLifecycleEvent{
             .mode_id = std::string(mode->descriptor().id),
             .phase = gameplay::ModeLifecyclePhase::Exiting,
+            .reason = exit_context.reason,
+            .api_version = mode->descriptor().api_version,
         });
-    mode->on_exit(*this);
+    mode->on_exit(*this, exit_context);
     event_bus_.publish(
         "app.smoke",
-        frame_timing().frame_index,
-        0,
+        exit_context.frame_index,
+        exit_context.fixed_step_index,
         gameplay::ModeLifecycleEvent{
             .mode_id = std::string(mode->descriptor().id),
             .phase = gameplay::ModeLifecyclePhase::Exited,
+            .reason = exit_context.reason,
+            .api_version = mode->descriptor().api_version,
         });
     active_shell_ = nullptr;
 
@@ -337,6 +562,54 @@ int SmokeApplication::run() {
     }
 
     {
+        const gameplay::ReplaySession session = gameplay::make_replay_session(replay_recorder_);
+        const gameplay::ReplayValidator validator{};
+        const gameplay::ReplayValidationReport validation_report = validator.validate(session);
+        std::ostringstream validation_stream;
+        validation_stream << "Replay validation: ok=" << validation_report.ok
+                          << " inputs=" << validation_report.input_frame_count
+                          << "/" << validation_report.total_input_frames_recorded
+                          << " checkpoints=" << validation_report.checkpoint_count
+                          << "/" << validation_report.total_checkpoints_recorded
+                          << " input-truncated=" << validation_report.input_frames_truncated
+                          << " ckpt-truncated=" << validation_report.checkpoints_truncated
+                          << " mono-frame-violations=" << validation_report.monotonic_frame_violations
+                          << " mono-step-violations=" << validation_report.monotonic_step_violations
+                          << " duplicate-steps=" << validation_report.duplicate_step_count
+                          << " issues=" << validation_report.issues.size();
+        crash_safe_log_.write(
+            validation_report.ok ? foundation::LogLevel::Info : foundation::LogLevel::Warning,
+            validation_stream.str());
+
+        std::vector<gameplay::ReplayObservedHash> observed;
+        observed.reserve(session.checkpoints.size());
+        for (const gameplay::ReplayCheckpoint& checkpoint : session.checkpoints) {
+            observed.push_back(gameplay::ReplayObservedHash{
+                .simulation_step = checkpoint.simulation_step,
+                .state_hash = checkpoint.authoritative_state_hash,
+            });
+        }
+
+        const gameplay::ReplayDivergenceReport divergence_report =
+            validator.compare_observations(session, observed);
+        std::ostringstream divergence_stream;
+        divergence_stream << "Replay determinism check: matched=" << divergence_report.matched_count
+                          << "/" << divergence_report.observed_count
+                          << " mismatched=" << divergence_report.mismatched_count
+                          << " missing=" << divergence_report.missing_observation_count
+                          << " unexpected=" << divergence_report.unexpected_observation_count;
+        crash_safe_log_.write(
+            divergence_report.mismatched_count == 0 ? foundation::LogLevel::Info : foundation::LogLevel::Error,
+            divergence_stream.str());
+
+        const gameplay::ReplayInspectionView inspection_view =
+            gameplay::build_replay_inspection_view(session);
+        crash_safe_log_.write(
+            foundation::LogLevel::Info,
+            gameplay::format_replay_inspection_view(inspection_view));
+    }
+
+    {
         std::ostringstream event_stream;
         event_stream << "Event bus: messages=" << event_bus_.published_count()
                      << " retained=" << event_bus_.count();
@@ -344,6 +617,80 @@ int SmokeApplication::run() {
             event_stream << " last=" << gameplay::describe_event(*event);
         }
         crash_safe_log_.write(foundation::LogLevel::Info, event_stream.str());
+    }
+
+    {
+        const gameplay::PresentationEventStatistics& presentation_stats = presentation_event_bus_.statistics();
+        std::ostringstream presentation_stream;
+        presentation_stream << "Presentation hooks: camera=" << presentation_stats.camera_event_count
+                            << " screen=" << presentation_stats.screen_effect_count
+                            << " haptics=" << presentation_stats.haptics_event_count
+                            << " dropped=" << presentation_stats.dropped_event_count;
+        crash_safe_log_.write(foundation::LogLevel::Info, presentation_stream.str());
+    }
+
+    {
+        const gameplay::ModeFlowSnapshot& flow_snapshot = mode_flow_.snapshot();
+        std::ostringstream flow_stream;
+        flow_stream << "Mode flow: state=" << gameplay::to_string(flow_snapshot.state)
+                    << " reason=" << gameplay::to_string(flow_snapshot.last_reason)
+                    << " transitions=" << flow_snapshot.transition_count
+                    << " practice=" << flow_snapshot.flags.practice_active
+                    << " no-fail=" << flow_snapshot.flags.no_fail_active
+                    << " autoplay=" << flow_snapshot.flags.autoplay_active
+                    << " results=" << flow_snapshot.results.present;
+        if (flow_snapshot.results.present) {
+            flow_stream << " results-label=" << flow_snapshot.results.label
+                        << " score=" << flow_snapshot.results.score_summary.score
+                        << " combo=" << flow_snapshot.results.score_summary.max_combo;
+        }
+        crash_safe_log_.write(foundation::LogLevel::Info, flow_stream.str());
+    }
+
+    {
+        std::string save_error;
+        const bool save_ok = save_data_backend_.save(save_data_store_.document(), &save_error);
+        const gameplay::SaveDataStatistics stats = save_data_store_.statistics();
+        std::ostringstream save_stream;
+        save_stream << "Save data: backend=" << save_data_backend_.backend_id()
+                    << " saved=" << save_ok
+                    << " serialized-bytes=" << save_data_backend_.serialized().size()
+                    << " saves=" << save_data_backend_.save_count()
+                    << " loads=" << save_data_backend_.load_count()
+                    << " revision=" << stats.document_revision
+                    << " mutations=" << stats.mutation_count
+                    << " rejected=" << stats.rejected_mutation_count
+                    << " categories=" << stats.settings_category_count
+                    << " settings=" << stats.setting_count
+                    << " unlocks=" << stats.unlock_count
+                    << " mode-stats=" << stats.mode_stats_count;
+        crash_safe_log_.write(
+            save_ok ? foundation::LogLevel::Info : foundation::LogLevel::Warning,
+            save_stream.str());
+
+        gameplay::SaveDataDocument round_trip{};
+        std::string round_trip_error;
+        const bool round_trip_ok =
+            gameplay::parse_save_data(save_data_backend_.serialized(), round_trip, &round_trip_error) &&
+            gameplay::save_data_documents_equal(round_trip, save_data_store_.document());
+        std::ostringstream round_trip_stream;
+        round_trip_stream << "Save data round-trip: ok=" << round_trip_ok
+                          << " bytes=" << save_data_backend_.serialized().size();
+        if (!round_trip_ok && !round_trip_error.empty()) {
+            round_trip_stream << " error=" << round_trip_error;
+        }
+        crash_safe_log_.write(
+            round_trip_ok ? foundation::LogLevel::Info : foundation::LogLevel::Error,
+            round_trip_stream.str());
+    }
+
+    if (hot_reload_controller.summary().enabled) {
+        std::ostringstream hot_reload_stream;
+        hot_reload_stream << "Hot reload summary: applied=" << hot_reload_controller.summary().applied_reload_count
+                          << " pending=" << hot_reload_controller.summary().pending_reload_count
+                          << " failed=" << hot_reload_controller.summary().failed_reload_count
+                          << " rev=" << hot_reload_controller.summary().revision;
+        crash_safe_log_.write(foundation::LogLevel::Info, hot_reload_stream.str());
     }
 
     if (had_audio_authority) {
@@ -370,6 +717,7 @@ int SmokeApplication::run() {
 
     transport.unbind_audio_clip();
     active_transport_ = nullptr;
+    active_mode_id_.clear();
 
     world_model_.reset();
     resource_registry_.clear();
@@ -393,6 +741,18 @@ const foundation::RuntimeBudget& SmokeApplication::runtime_budget() const noexce
 
 const platform::StackProbe& SmokeApplication::stack_probe() const noexcept {
     return dependencies_.stack_probe;
+}
+
+const gameplay::ModeInputFrame& SmokeApplication::input() const noexcept {
+    return mode_input_frame_;
+}
+
+const gameplay::InputActionMapStore& SmokeApplication::input_action_maps() const noexcept {
+    return dependencies_.input_action_maps;
+}
+
+gameplay::InputActionMapStore& SmokeApplication::input_action_maps() noexcept {
+    return dependencies_.input_action_maps;
 }
 
 const platform::InputSnapshot& SmokeApplication::input_snapshot() const noexcept {
@@ -426,12 +786,32 @@ const gameplay::ModeConfigurationStore& SmokeApplication::mode_configuration() c
     return dependencies_.mode_configuration;
 }
 
+const gameplay::ModifierStore& SmokeApplication::modifier_store() const noexcept {
+    return dependencies_.modifiers;
+}
+
+const gameplay::ModifierSet& SmokeApplication::modifiers() const noexcept {
+    return dependencies_.modifiers.view(active_mode_id_);
+}
+
 gameplay::EventBus& SmokeApplication::event_bus() noexcept {
     return event_bus_;
 }
 
+gameplay::PresentationEventBus& SmokeApplication::presentation_events() noexcept {
+    return presentation_event_bus_;
+}
+
+gameplay::ModeFlowController& SmokeApplication::flow() noexcept {
+    return mode_flow_;
+}
+
 gameplay::ReplayRecorder& SmokeApplication::replay() noexcept {
     return replay_recorder_;
+}
+
+gameplay::SaveDataStore& SmokeApplication::save_data() noexcept {
+    return save_data_store_;
 }
 
 gameplay::WorldModel& SmokeApplication::world_model() noexcept {
@@ -523,9 +903,13 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
         foundation::LogLevel::Info,
         "  config source: " + dependencies_.configuration_source);
     {
+        const gameplay::InputActionMapSummary action_map_summary = dependencies_.input_action_maps.summary();
         std::ostringstream input_stream;
         input_stream << "  input bindings: actions=" << dependencies_.input_bindings.action_count()
-                     << " bindings=" << dependencies_.input_bindings.binding_count();
+                     << " bindings=" << dependencies_.input_bindings.binding_count()
+                     << " maps=" << action_map_summary.binding_count
+                     << " contexts=" << action_map_summary.active_context_count << '/' << action_map_summary.context_count
+                     << " profile=" << dependencies_.input_action_maps.active_device_profile();
         crash_safe_log_.write(foundation::LogLevel::Info, input_stream.str());
     }
     {
@@ -535,10 +919,25 @@ void SmokeApplication::log_startup(const foundation::BuildInfo& build_info) {
                     << " entries=" << mode_summary.entry_count;
         crash_safe_log_.write(foundation::LogLevel::Info, mode_stream.str());
     }
+    {
+        const gameplay::ModifierStoreSummary modifier_summary = dependencies_.modifiers.summary();
+        std::ostringstream modifier_stream;
+        modifier_stream << "  modifiers: modes=" << modifier_summary.mode_count
+                        << " entries=" << modifier_summary.entry_count
+                        << " enabled=" << modifier_summary.enabled_entry_count;
+        crash_safe_log_.write(foundation::LogLevel::Info, modifier_stream.str());
+    }
     if (!dependencies_.startup_mode_id.empty()) {
         crash_safe_log_.write(
             foundation::LogLevel::Info,
             "  startup mode: " + dependencies_.startup_mode_id);
+    }
+    {
+        std::ostringstream registry_stream;
+        registry_stream << "  mode registry: api=" << gameplay::k_current_mode_api_version
+                        << " modes=" << dependencies_.game_mode_registry.registered_modes().size()
+                        << " extension-policy=source-level-v1";
+        crash_safe_log_.write(foundation::LogLevel::Info, registry_stream.str());
     }
 }
 

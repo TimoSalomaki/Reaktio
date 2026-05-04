@@ -3,6 +3,7 @@
 #include "reaktio/render/RenderTypes.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string_view>
 
@@ -60,6 +61,9 @@ class RenderSubsystem {
 
     bool initialize(const platform::WindowState& window_state);
     bool load_cooked_assets(foundation::ResourceRegistry& resource_registry);
+    bool load_cooked_assets(
+      const std::filesystem::path& manifest_path,
+      foundation::ResourceRegistry& resource_registry);
     void begin_frame(const platform::WindowState& window_state);
     void submit_extracted_frame(const RenderFramePackets& packets) noexcept;
     void draw_debug_overlay(
