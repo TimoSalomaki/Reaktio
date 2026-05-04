@@ -258,14 +258,14 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 8 - Vertical Slice A: Typing and Falling-Character Mode
 
-- [ ] Implement a typing-focused mode module that uses text input rather than only physical scancodes.
-- [ ] Add glyph, grapheme, and keyboard-layout aware prompt handling.
-- [ ] Implement falling-character or falling-token lanes with configurable travel time and density.
-- [ ] Implement judgement rules for exact character matches, optional leniency, and combo preservation.
-- [ ] Add lesson content structures for exercises, word groups, and progression sets.
-- [ ] Add UI flows for mistake feedback, hand or key hints, and per-key performance tracking.
-- [ ] Add analytics for common error patterns and timing distributions.
-- [ ] Validate that this mode can run entirely on the shared engine stack without custom one-off hacks.
+- [x] Implement a typing-focused mode module that uses text input rather than only physical scancodes.
+- [x] Add glyph, grapheme, and keyboard-layout aware prompt handling.
+- [x] Implement falling-character or falling-token lanes with configurable travel time and density.
+- [x] Implement judgement rules for exact character matches, optional leniency, and combo preservation.
+- [x] Add lesson content structures for exercises, word groups, and progression sets.
+- [x] Add UI flows for mistake feedback, hand or key hints, and per-key performance tracking.
+- [x] Add analytics for common error patterns and timing distributions.
+- [x] Validate that this mode can run entirely on the shared engine stack without custom one-off hacks.
 
 ### Phase 9 - Vertical Slice B: Rail, Lane, and Runner-Style Mode
 

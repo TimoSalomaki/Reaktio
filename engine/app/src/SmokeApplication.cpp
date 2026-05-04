@@ -3,6 +3,9 @@
 
 #include "reaktio/gameplay/ReplayInspection.hpp"
 #include "reaktio/gameplay/ReplayPlayback.hpp"
+#include "reaktio/gameplay/TypingAnalyticsExtensions.hpp"
+#include "reaktio/gameplay/TypingLesson.hpp"
+#include "reaktio/gameplay/TypingPrompt.hpp"
 
 #include "reaktio/app/AuthoritativeAudioTransport.hpp"
 #include "reaktio/audio/AudioClipLibrary.hpp"
@@ -15,6 +18,7 @@
 
 #include <SDL3/SDL_init.h>
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -530,6 +534,91 @@ int SmokeApplication::run() {
             .reason = exit_context.reason,
             .api_version = mode->descriptor().api_version,
         });
+
+    {
+        // Phase 8 generic post-shutdown mode dry run. SmokeApplication has no
+        // knowledge of any specific game mode here; it simply drives the real
+        // IGameMode lifecycle on the injected mode using this host. main.cpp
+        // is responsible for constructing the mode (typically the typing
+        // slice) and feeding the scripted text events that exercise it.
+        // Runs while shell + transport are still alive (before the cleanup
+        // below nulls them out) so the mode sees the same shared engine
+        // surfaces it would see during a normal run.
+        if (dependencies_.post_shutdown_dry_run_mode != nullptr) {
+            gameplay::IGameMode& dry_run_mode = *dependencies_.post_shutdown_dry_run_mode;
+            const std::uint64_t baseline_save_revision =
+                save_data_store_.statistics().document_revision;
+            const std::uint64_t baseline_screen_effects =
+                presentation_event_bus_.statistics().screen_effect_count;
+
+            // The host is responsible for placing shared subsystems back into
+            // a clean state before invoking another mode's lifecycle. Modes
+            // assume an Idle flow on on_enter (begin() requires Idle), so a
+            // dry-run after a finalized main mode would silently no-op. The
+            // verifier needs this to actually exercise flow integration.
+            mode_flow_.reset();
+            const gameplay::ModeFlowSnapshot flow_before_dry_run = mode_flow_.snapshot();
+
+            gameplay::ModeEnterContext enter_ctx{};
+            enter_ctx.reason = gameplay::ModeLifecycleReason::ModeSwitch;
+            enter_ctx.frame_index = frame_timing().frame_index;
+            dry_run_mode.on_enter(*this, enter_ctx);
+
+            std::uint64_t step_index = 0;
+            std::uint64_t frame_index = frame_timing().frame_index;
+            const double fixed_delta_seconds = frame_timing().fixed_step_seconds > 0.0
+                ? frame_timing().fixed_step_seconds
+                : 1.0 / 120.0;
+            for (const std::string& text : dependencies_.post_shutdown_dry_run_text_events) {
+                mode_input_frame_.clear();
+                if (!text.empty()) {
+                    mode_input_frame_.mutable_text().add_text_event(
+                        gameplay::TextInputEvent{
+                            .timestamp_ns = 0,
+                            .text = text,
+                        });
+                }
+                gameplay::ModeFixedStepContext step_ctx{};
+                step_ctx.frame_index = ++frame_index;
+                step_ctx.fixed_step_index = ++step_index;
+                step_ctx.fixed_delta_seconds = fixed_delta_seconds;
+                dry_run_mode.on_fixed_step(*this, step_ctx);
+            }
+
+            gameplay::ModeRenderContext render_ctx{};
+            render_ctx.frame_index = frame_index;
+            render_ctx.fixed_step_index = step_index;
+            dry_run_mode.on_render_extract(*this, render_ctx);
+
+            gameplay::ModeExitContext exit_ctx{};
+            exit_ctx.reason = gameplay::ModeLifecycleReason::Shutdown;
+            exit_ctx.frame_index = frame_index;
+            exit_ctx.fixed_step_index = step_index;
+            dry_run_mode.on_exit(*this, exit_ctx);
+
+            const auto save_delta =
+                save_data_store_.statistics().document_revision - baseline_save_revision;
+            const auto screen_effect_delta =
+                presentation_event_bus_.statistics().screen_effect_count -
+                baseline_screen_effects;
+            const gameplay::ModeFlowSnapshot& flow_after_dry_run = mode_flow_.snapshot();
+            const std::uint64_t flow_transition_delta =
+                flow_after_dry_run.transition_count - flow_before_dry_run.transition_count;
+
+            std::ostringstream slice_stream;
+            slice_stream << "Post-shutdown dry run: label="
+                         << dependencies_.post_shutdown_dry_run_label
+                         << " mode=" << dry_run_mode.descriptor().id
+                         << " family=" << dry_run_mode.descriptor().family
+                         << " text-events=" << dependencies_.post_shutdown_dry_run_text_events.size()
+                         << " save-mutations=" << save_delta
+                         << " screen-fx=" << screen_effect_delta
+                         << " flow-transitions=" << flow_transition_delta
+                         << " flow-final=" << gameplay::to_string(flow_after_dry_run.state);
+            crash_safe_log_.write(foundation::LogLevel::Info, slice_stream.str());
+        }
+    }
+
     active_shell_ = nullptr;
 
     {
@@ -682,6 +771,249 @@ int SmokeApplication::run() {
         crash_safe_log_.write(
             round_trip_ok ? foundation::LogLevel::Info : foundation::LogLevel::Error,
             round_trip_stream.str());
+    }
+
+    {
+        // Phase 8 typing-primitive sanity check. This is a developer-time round
+        // trip that exercises every TypingCursor outcome. The actual typing
+        // slice mode will replace this with a real prompt-driven scenario.
+        const gameplay::TypingPrompt prompt = gameplay::make_typing_prompt(
+            gameplay::TypingPromptMetadata{
+                .id = "smoke.typing.sanity",
+                .display_name = "Smoke Typing Sanity",
+                .layout_hint = "en-US",
+            },
+            "Hi  there\xC3\xA9!");
+        gameplay::TypingCursor cursor{};
+        cursor.reset(prompt);
+        gameplay::TypingAnalytics analytics{};
+        const gameplay::TypingLeniency lenient_policy{
+            .case_insensitive = true,
+            .collapse_whitespace_runs = true,
+            .ignore_leading_whitespace = false,
+            .ignore_trailing_whitespace = false,
+            .skip_on_mismatch = false,
+            .preserve_combo_on_mismatch = false,
+        };
+        const std::array<std::string_view, 9> typed{
+            "H",            // exact
+            "i",            // exact
+            " ",            // matches the first whitespace
+            " ",            // collapsed -> ignored-whitespace
+            "T",            // case-insensitive lenient match for 't'
+            "h", "e", "r",  // exact
+            "X",            // mismatch (resets combo)
+        };
+        for (std::string_view chunk : typed) {
+            const gameplay::TypingJudgementResult result = cursor.accept(chunk, lenient_policy);
+            analytics.record(result);
+        }
+        // Final corrective character to verify combo restarts and lookups work.
+        analytics.record(cursor.accept("e", lenient_policy));
+
+        const gameplay::TypingAnalyticsSummary summary = analytics.summary();
+        std::ostringstream typing_stream;
+        typing_stream << std::fixed << std::setprecision(3)
+                      << "Typing sanity: prompt=" << prompt.metadata.id
+                      << " graphemes=" << prompt.graphemes.size()
+                      << " cursor=" << cursor.cursor() << "/" << prompt.graphemes.size()
+                      << " hits=" << cursor.hit_count()
+                      << " misses=" << cursor.miss_count()
+                      << " skips=" << cursor.skip_count()
+                      << " lenient=" << cursor.lenient_match_count()
+                      << " combo=" << cursor.combo() << " max-combo=" << cursor.max_combo()
+                      << " ignored-ws=" << summary.total_ignored_whitespace
+                      << " unique=" << summary.unique_grapheme_count
+                      << " accuracy=" << summary.accuracy_ratio
+                      << " last=" << gameplay::to_string(cursor.last_result().judgement);
+        crash_safe_log_.write(foundation::LogLevel::Info, typing_stream.str());
+    }
+
+    {
+        // Phase 8 leniency edge-case verifier. Confirms the trailing-ws
+        // fast-forward actually fires (catches the dead-flag regression that
+        // would silently let the option be ignored again).
+        const gameplay::TypingPrompt trailing_prompt = gameplay::make_typing_prompt(
+            gameplay::TypingPromptMetadata{.id = "smoke.typing.trailing-ws"},
+            "hi  ");
+        gameplay::TypingCursor trailing_cursor{};
+        trailing_cursor.reset(trailing_prompt);
+        const gameplay::TypingLeniency trailing_policy{
+            .ignore_trailing_whitespace = true,
+        };
+        (void)trailing_cursor.accept("h", trailing_policy);
+        const gameplay::TypingJudgementResult final_match =
+            trailing_cursor.accept("i", trailing_policy);
+
+        std::ostringstream trailing_stream;
+        trailing_stream << "Typing trailing-ws: prompt-graphemes=" << trailing_prompt.graphemes.size()
+                        << " cursor=" << trailing_cursor.cursor()
+                        << " finished=" << trailing_cursor.finished()
+                        << " hits=" << trailing_cursor.hit_count()
+                        << " misses=" << trailing_cursor.miss_count()
+                        << " skips=" << trailing_cursor.skip_count()
+                        << " last=" << gameplay::to_string(final_match.judgement);
+        crash_safe_log_.write(foundation::LogLevel::Info, trailing_stream.str());
+    }
+
+    {
+        // Phase 8 lesson + extension analytics sanity check. Builds a minimal
+        // lesson programmatically, validates it, runs a deterministic typing
+        // sequence, feeds error pairs and per-grapheme press latencies into
+        // the extension trackers, and submits a result to the progression.
+        gameplay::TypingLesson lesson{};
+        lesson.id = "smoke.lesson.basic";
+        lesson.display_name = "Smoke Basic Lesson";
+        lesson.locale_tag = "en-US";
+        lesson.word_groups.push_back(gameplay::TypingWordGroup{
+            .id = "smoke.words.greetings",
+            .display_name = "Greetings",
+            .layout_hint = "en-US",
+            .locale_tag = "en-US",
+            .entries = {"hi", "hello", "hey"},
+        });
+        lesson.exercises.push_back(gameplay::TypingExercise{
+            .id = "smoke.exercise.greet",
+            .display_name = "Greet",
+            .prompt_text = "hi there",
+            .leniency = gameplay::TypingLeniency{.case_insensitive = true},
+            .word_group_ids = {"smoke.words.greetings"},
+            .target_combo = 4,
+            .target_accuracy = 0.5,
+            .layout_hint = "en-US",
+            .locale_tag = "en-US",
+        });
+        lesson.progressions.push_back(gameplay::TypingProgression{
+            .id = "smoke.progression.intro",
+            .display_name = "Intro",
+            .steps = {
+                gameplay::TypingProgressionStep{
+                    .exercise_id = "smoke.exercise.greet",
+                    .minimum_accuracy_to_advance = 0.5,
+                    .minimum_combo_to_advance = 4,
+                    .required = true,
+                },
+            },
+        });
+
+        const gameplay::TypingLessonValidationReport validation =
+            gameplay::validate_typing_lesson(lesson);
+        gameplay::TypingLessonStore store;
+        const gameplay::TypingLessonStore::AddResult add_result =
+            store.add_lesson(std::move(lesson));
+        const gameplay::TypingLesson* stored = store.find("smoke.lesson.basic");
+        const gameplay::TypingExercise& exercise = stored->exercises.front();
+
+        gameplay::TypingPrompt prompt = gameplay::make_prompt_from_exercise(exercise);
+        gameplay::TypingCursor cursor{};
+        cursor.reset(prompt);
+        gameplay::TypingErrorPatternTracker error_tracker;
+        gameplay::TypingTimingTracker timing_tracker(gameplay::TypingTimingTrackerOptions{
+            .capacity = 32,
+            .histogram_bucket_count = 6,
+            .histogram_bucket_microseconds = 50000,
+        });
+
+        struct ScriptedKey {
+            std::string_view text;
+            rhythm::TimelineMicroseconds latency_microseconds;
+        };
+        const std::array<ScriptedKey, 9> scripted{{
+            {"h", 80000},   // match
+            {"i", 90000},   // match
+            {" ", 110000},  // match (space)
+            {"x", 250000},  // mismatch -> 'x' for 't'
+            {"t", 120000},  // match
+            {"h", 100000},  // match
+            {"e", 95000},   // match
+            {"r", 105000},  // match
+            {"e", 130000},  // match -> completes "hi there"
+        }};
+
+        std::uint64_t simulation_step = 0;
+        for (const ScriptedKey& key : scripted) {
+            const gameplay::TypingJudgementResult result =
+                cursor.accept(key.text, exercise.leniency);
+            error_tracker.record(result);
+            timing_tracker.record(gameplay::TypingTimingSample{
+                .simulation_step = simulation_step++,
+                .frame_index = simulation_step,
+                .latency_microseconds = key.latency_microseconds,
+                .judgement = result.judgement,
+                .advanced_cursor = result.advanced_cursor,
+            });
+        }
+
+        const gameplay::TypingAnalyticsSummary cursor_view{
+            .total_judgements = cursor.hit_count() + cursor.miss_count() + cursor.skip_count(),
+            .total_hits = cursor.hit_count(),
+            .total_misses = cursor.miss_count(),
+            .total_skips = cursor.skip_count(),
+            .total_lenient_hits = cursor.lenient_match_count(),
+            .accuracy_ratio = (cursor.hit_count() + cursor.miss_count() + cursor.skip_count()) > 0
+                ? static_cast<double>(cursor.hit_count()) /
+                      static_cast<double>(cursor.hit_count() + cursor.miss_count() + cursor.skip_count())
+                : 0.0,
+        };
+        const gameplay::TypingExerciseResult exercise_result{
+            .exercise_id = exercise.id,
+            .hit_count = cursor.hit_count(),
+            .miss_count = cursor.miss_count(),
+            .skip_count = cursor.skip_count(),
+            .lenient_match_count = cursor.lenient_match_count(),
+            .max_combo = cursor.max_combo(),
+            .accuracy_ratio = cursor_view.accuracy_ratio,
+            .prompt_completed = cursor.finished(),
+        };
+        gameplay::TypingProgressionTracker progression_tracker;
+        progression_tracker.reset(&stored->progressions.front());
+        const gameplay::TypingProgressionTracker::StepOutcome progression_outcome =
+            progression_tracker.submit_result(exercise_result);
+
+        const gameplay::TypingErrorPatternSummary errors = error_tracker.summarize();
+        const gameplay::TypingTimingSummary timing = timing_tracker.summarize();
+        const gameplay::TypingTimingHistogram histogram = timing_tracker.build_histogram();
+
+        std::ostringstream lesson_stream;
+        lesson_stream << "Typing lesson: id=" << "smoke.lesson.basic"
+                      << " validation-ok=" << validation.ok
+                      << " add=" << static_cast<int>(add_result)
+                      << " store=" << store.lesson_count()
+                      << " exercise=" << exercise.id
+                      << " prompt-graphemes=" << prompt.graphemes.size()
+                      << " hits=" << cursor.hit_count()
+                      << " misses=" << cursor.miss_count()
+                      << " max-combo=" << cursor.max_combo()
+                      << " completed=" << cursor.finished()
+                      << " progression-outcome=" << static_cast<int>(progression_outcome);
+        crash_safe_log_.write(foundation::LogLevel::Info, lesson_stream.str());
+
+        std::ostringstream errors_stream;
+        errors_stream << "Typing error patterns: mismatches=" << errors.total_mismatches
+                      << " skips=" << errors.total_skips
+                      << " unique=" << error_tracker.unique_pair_count()
+                      << " top=";
+        for (const gameplay::TypingErrorPatternEntry& entry : errors.top_pairs) {
+            errors_stream << "[" << entry.pair.expected << "->" << entry.pair.observed
+                          << " x" << entry.count << "]";
+        }
+        crash_safe_log_.write(foundation::LogLevel::Info, errors_stream.str());
+
+        std::ostringstream timing_stream;
+        timing_stream << "Typing timing: samples=" << timing.sample_count
+                      << " min-us=" << timing.min_latency_microseconds
+                      << " mean-us=" << timing.mean_latency_microseconds
+                      << " median-us=" << timing.median_latency_microseconds
+                      << " max-us=" << timing.max_latency_microseconds
+                      << " buckets[" << histogram.first_bucket_min_microseconds / 1000 << "..."
+                      << histogram.last_bucket_max_microseconds / 1000 << "ms,bucket="
+                      << histogram.bucket_microseconds / 1000 << "ms]=";
+        timing_stream << "<" << histogram.below_range_count;
+        for (std::uint32_t count : histogram.bucket_counts) {
+            timing_stream << " " << count;
+        }
+        timing_stream << " >" << histogram.above_range_count;
+        crash_safe_log_.write(foundation::LogLevel::Info, timing_stream.str());
     }
 
     if (hot_reload_controller.summary().enabled) {

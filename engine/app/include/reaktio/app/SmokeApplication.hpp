@@ -26,7 +26,9 @@
 
 #include <cstdint>
 #include <iosfwd>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace reaktio::foundation {
 struct BuildInfo;
@@ -53,6 +55,13 @@ struct SmokeApplicationDependencies {
     gameplay::ModeConfigurationStore mode_configuration;
     gameplay::ModifierStore modifiers;
     content::HotReloadConfig hot_reload;
+
+    // Optional: the smoke runs a deterministic post-shutdown lifecycle
+    // exercise on this mode if provided. The app library treats it as an
+    // opaque IGameMode and never assumes anything about its concrete type.
+    std::unique_ptr<gameplay::IGameMode> post_shutdown_dry_run_mode;
+    std::vector<std::string> post_shutdown_dry_run_text_events;
+    std::string post_shutdown_dry_run_label{"post-shutdown-dry-run"};
 };
 
 class SmokeApplication final : public gameplay::IModeHost {

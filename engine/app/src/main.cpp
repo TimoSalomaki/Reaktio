@@ -3,6 +3,7 @@
 
 #include "reaktio/games/reference/ReferenceSandboxMode.hpp"
 #include "reaktio/games/templates/StarterMode.hpp"
+#include "reaktio/games/typing_slice/TypingSliceMode.hpp"
 #include "reaktio/platform/StackProbe.hpp"
 
 #include <iostream>
@@ -14,6 +15,9 @@ int main() {
         return 1;
     }
     if (!game_mode_registry.register_mode<reaktio::games::templates::StarterMode>()) {
+        return 1;
+    }
+    if (!game_mode_registry.register_mode<reaktio::games::typing_slice::TypingSliceMode>()) {
         return 1;
     }
 
@@ -53,6 +57,25 @@ int main() {
         std::move(runtime_configuration.mode_configuration),
         std::move(runtime_configuration.modifiers),
         std::move(runtime_configuration.hot_reload),
+    };
+
+    // Phase 8: have the smoke run a deterministic post-shutdown lifecycle
+    // exercise of the registered typing slice. The smoke library treats it
+    // as an opaque IGameMode, so this stays the only place that knows about
+    // the typing slice's concrete type. Replay recording is disabled because
+    // the smoke's replay session is already finalized by shutdown.
+    reaktio::games::typing_slice::TypingSliceConfig typing_dry_run_config{};
+    typing_dry_run_config.record_replay_samples = false;
+    auto typing_slice =
+        std::make_unique<reaktio::games::typing_slice::TypingSliceMode>(
+            std::move(typing_dry_run_config));
+    dependencies.post_shutdown_dry_run_mode = std::move(typing_slice);
+    dependencies.post_shutdown_dry_run_label = "typing-slice-shared-stack-validation";
+    dependencies.post_shutdown_dry_run_text_events = {
+        "h", "i", " ", "r", "e", "a",
+        "X",  // deliberate miss for "k"
+        "k", "t", "i", "o",
+        "!",  // tail mismatch (prompt is "hi reaktio")
     };
 
     reaktio::app::SmokeApplication application{std::move(dependencies)};

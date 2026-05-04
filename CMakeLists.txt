@@ -267,6 +267,10 @@ add_library(reaktio_gameplay STATIC
     engine/gameplay/src/Scoring.cpp
     engine/gameplay/src/Transforms.cpp
     engine/gameplay/src/TransportController.cpp
+    engine/gameplay/src/TypingAnalyticsExtensions.cpp
+    engine/gameplay/src/TypingChart.cpp
+    engine/gameplay/src/TypingLesson.cpp
+    engine/gameplay/src/TypingPrompt.cpp
     engine/gameplay/src/WorldModel.cpp
 )
 add_library(Reaktio::gameplay ALIAS reaktio_gameplay)
@@ -356,6 +360,25 @@ target_link_libraries(
 )
 reaktio_configure_target(reaktio_reference_sandbox_mode)
 
+add_library(reaktio_typing_slice_mode STATIC
+    games/typing_slice/src/TypingSliceMode.cpp
+)
+add_library(Reaktio::typing_slice_mode ALIAS reaktio_typing_slice_mode)
+target_include_directories(reaktio_typing_slice_mode
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/games/typing_slice/include"
+)
+target_link_libraries(
+    reaktio_typing_slice_mode
+    PUBLIC
+        Reaktio::foundation
+        Reaktio::gameplay
+        Reaktio::platform_api
+        Reaktio::rhythm
+        Reaktio::render_api
+)
+reaktio_configure_target(reaktio_typing_slice_mode)
+
 add_library(reaktio_app STATIC
     engine/app/src/AuthoritativeAudioTransport.cpp
     engine/app/src/ContentHotReloadController.cpp
@@ -387,6 +410,7 @@ target_link_libraries(
         Reaktio::app
         Reaktio::starter_mode
         Reaktio::reference_sandbox_mode
+        Reaktio::typing_slice_mode
 )
 reaktio_configure_target(reaktio_smoke)
 
