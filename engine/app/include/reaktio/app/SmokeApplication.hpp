@@ -25,6 +25,7 @@
 #include "reaktio/platform/WindowState.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <iosfwd>
 #include <memory>
 #include <string>
@@ -57,11 +58,35 @@ struct SmokeApplicationDependencies {
     content::HotReloadConfig hot_reload;
 
     // Optional: the smoke runs a deterministic post-shutdown lifecycle
-    // exercise on this mode if provided. The app library treats it as an
+    // exercise on each entry. The app library treats every entry as an
     // opaque IGameMode and never assumes anything about its concrete type.
-    std::unique_ptr<gameplay::IGameMode> post_shutdown_dry_run_mode;
-    std::vector<std::string> post_shutdown_dry_run_text_events;
-    std::string post_shutdown_dry_run_label{"post-shutdown-dry-run"};
+    // The vector form lets multiple slice modes plug into the same hook;
+    // each entry carries its own scripted input frames so the smoke can
+    // exercise text-driven, action-driven, or analog-driven modes uniformly.
+    struct PostShutdownScriptedFrame {
+        // Mode-specific identifiers; the smoke just feeds these into the
+        // ModeInputFrame's surfaces. Empty action_id means no action is
+        // pressed this step. Empty utf8_text means no text event is emitted.
+        std::string utf8_text;
+        std::string action_context_id;
+        std::string action_id;
+        bool action_down{false};
+        bool action_pressed{false};
+        bool action_released{false};
+    };
+    struct PostShutdownDryRunEntry {
+        std::unique_ptr<gameplay::IGameMode> mode;
+        std::string label{"post-shutdown-dry-run"};
+        std::vector<PostShutdownScriptedFrame> scripted_frames;
+        // Optional verifier the slice owner can use to append slice-specific
+        // key=value fields to the post-shutdown log line. The smoke library
+        // stays oblivious to slice internals; main.cpp uses the callback to
+        // downcast to the concrete mode type and read its observation
+        // surfaces. Returns the appended substring, e.g. " cues-judged=4
+        // hold-outcome=completed". Empty return = no extra fields.
+        std::function<std::string(const gameplay::IGameMode&)> verifier;
+    };
+    std::vector<PostShutdownDryRunEntry> post_shutdown_dry_runs;
 };
 
 class SmokeApplication final : public gameplay::IModeHost {

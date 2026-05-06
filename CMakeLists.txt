@@ -260,6 +260,10 @@ add_library(reaktio_gameplay STATIC
     engine/gameplay/src/Modifiers.cpp
     engine/gameplay/src/MotionCollision.cpp
     engine/gameplay/src/PresentationEvents.cpp
+    engine/gameplay/src/RailChart.cpp
+    engine/gameplay/src/RailInteractionRules.cpp
+    engine/gameplay/src/RailObstacles.cpp
+    engine/gameplay/src/RailPath.cpp
     engine/gameplay/src/ReplayInspection.cpp
     engine/gameplay/src/ReplayPlayback.cpp
     engine/gameplay/src/ReplayRecorder.cpp
@@ -379,6 +383,25 @@ target_link_libraries(
 )
 reaktio_configure_target(reaktio_typing_slice_mode)
 
+add_library(reaktio_rail_slice_mode STATIC
+    games/rail_slice/src/RailSliceMode.cpp
+)
+add_library(Reaktio::rail_slice_mode ALIAS reaktio_rail_slice_mode)
+target_include_directories(reaktio_rail_slice_mode
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/games/rail_slice/include"
+)
+target_link_libraries(
+    reaktio_rail_slice_mode
+    PUBLIC
+        Reaktio::foundation
+        Reaktio::gameplay
+        Reaktio::platform_api
+        Reaktio::rhythm
+        Reaktio::render_api
+)
+reaktio_configure_target(reaktio_rail_slice_mode)
+
 add_library(reaktio_app STATIC
     engine/app/src/AuthoritativeAudioTransport.cpp
     engine/app/src/ContentHotReloadController.cpp
@@ -411,6 +434,7 @@ target_link_libraries(
         Reaktio::starter_mode
         Reaktio::reference_sandbox_mode
         Reaktio::typing_slice_mode
+        Reaktio::rail_slice_mode
 )
 reaktio_configure_target(reaktio_smoke)
 

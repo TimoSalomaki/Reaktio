@@ -1,6 +1,9 @@
 #include "reaktio/app/ContentHotReloadController.hpp"
 #include "reaktio/app/SmokeApplication.hpp"
 
+#include "reaktio/gameplay/RailChart.hpp"
+#include "reaktio/gameplay/RailObstacles.hpp"
+#include "reaktio/gameplay/RailPath.hpp"
 #include "reaktio/gameplay/ReplayInspection.hpp"
 #include "reaktio/gameplay/ReplayPlayback.hpp"
 #include "reaktio/gameplay/TypingAnalyticsExtensions.hpp"
@@ -536,46 +539,59 @@ int SmokeApplication::run() {
         });
 
     {
-        // Phase 8 generic post-shutdown mode dry run. SmokeApplication has no
-        // knowledge of any specific game mode here; it simply drives the real
-        // IGameMode lifecycle on the injected mode using this host. main.cpp
-        // is responsible for constructing the mode (typically the typing
-        // slice) and feeding the scripted text events that exercise it.
+        // Phase 8/9 generic post-shutdown mode dry run. SmokeApplication has
+        // no knowledge of any specific game mode here; it simply drives the
+        // real IGameMode lifecycle on each injected mode using this host.
+        // main.cpp constructs the modes (typing slice, rail slice, ...) and
+        // feeds the scripted input frames that exercise them. The vector
+        // form lets multiple slice modes plug into the same hook without
+        // forcing main.cpp to grow a custom verifier per mode family.
         // Runs while shell + transport are still alive (before the cleanup
-        // below nulls them out) so the mode sees the same shared engine
+        // below nulls them out) so each mode sees the same shared engine
         // surfaces it would see during a normal run.
-        if (dependencies_.post_shutdown_dry_run_mode != nullptr) {
-            gameplay::IGameMode& dry_run_mode = *dependencies_.post_shutdown_dry_run_mode;
+        std::uint64_t step_index = 0;
+        std::uint64_t frame_index = frame_timing().frame_index;
+        const double fixed_delta_seconds = frame_timing().fixed_step_seconds > 0.0
+            ? frame_timing().fixed_step_seconds
+            : 1.0 / 120.0;
+
+        for (const auto& entry : dependencies_.post_shutdown_dry_runs) {
+            if (entry.mode == nullptr) {
+                continue;
+            }
+            gameplay::IGameMode& dry_run_mode = *entry.mode;
             const std::uint64_t baseline_save_revision =
                 save_data_store_.statistics().document_revision;
             const std::uint64_t baseline_screen_effects =
                 presentation_event_bus_.statistics().screen_effect_count;
 
-            // The host is responsible for placing shared subsystems back into
-            // a clean state before invoking another mode's lifecycle. Modes
-            // assume an Idle flow on on_enter (begin() requires Idle), so a
-            // dry-run after a finalized main mode would silently no-op. The
-            // verifier needs this to actually exercise flow integration.
+            // Modes assume an Idle flow on on_enter (begin() requires Idle),
+            // so the host resets mode_flow_ between dry-run entries.
             mode_flow_.reset();
             const gameplay::ModeFlowSnapshot flow_before_dry_run = mode_flow_.snapshot();
 
             gameplay::ModeEnterContext enter_ctx{};
             enter_ctx.reason = gameplay::ModeLifecycleReason::ModeSwitch;
-            enter_ctx.frame_index = frame_timing().frame_index;
+            enter_ctx.frame_index = frame_index;
             dry_run_mode.on_enter(*this, enter_ctx);
 
-            std::uint64_t step_index = 0;
-            std::uint64_t frame_index = frame_timing().frame_index;
-            const double fixed_delta_seconds = frame_timing().fixed_step_seconds > 0.0
-                ? frame_timing().fixed_step_seconds
-                : 1.0 / 120.0;
-            for (const std::string& text : dependencies_.post_shutdown_dry_run_text_events) {
+            for (const auto& scripted : entry.scripted_frames) {
                 mode_input_frame_.clear();
-                if (!text.empty()) {
+                if (!scripted.utf8_text.empty()) {
                     mode_input_frame_.mutable_text().add_text_event(
                         gameplay::TextInputEvent{
                             .timestamp_ns = 0,
-                            .text = text,
+                            .text = scripted.utf8_text,
+                        });
+                }
+                if (!scripted.action_id.empty()) {
+                    mode_input_frame_.mutable_actions().set_action_state(
+                        gameplay::InputActionState{
+                            .context_id = scripted.action_context_id,
+                            .action_id = scripted.action_id,
+                            .down = scripted.action_down,
+                            .pressed = scripted.action_pressed,
+                            .released = scripted.action_released,
                         });
                 }
                 gameplay::ModeFixedStepContext step_ctx{};
@@ -606,15 +622,20 @@ int SmokeApplication::run() {
                 flow_after_dry_run.transition_count - flow_before_dry_run.transition_count;
 
             std::ostringstream slice_stream;
-            slice_stream << "Post-shutdown dry run: label="
-                         << dependencies_.post_shutdown_dry_run_label
+            slice_stream << "Post-shutdown dry run: label=" << entry.label
                          << " mode=" << dry_run_mode.descriptor().id
                          << " family=" << dry_run_mode.descriptor().family
-                         << " text-events=" << dependencies_.post_shutdown_dry_run_text_events.size()
+                         << " scripted-frames=" << entry.scripted_frames.size()
                          << " save-mutations=" << save_delta
                          << " screen-fx=" << screen_effect_delta
                          << " flow-transitions=" << flow_transition_delta
                          << " flow-final=" << gameplay::to_string(flow_after_dry_run.state);
+            if (entry.verifier) {
+                const std::string verifier_extra = entry.verifier(dry_run_mode);
+                if (!verifier_extra.empty()) {
+                    slice_stream << verifier_extra;
+                }
+            }
             crash_safe_log_.write(foundation::LogLevel::Info, slice_stream.str());
         }
     }
@@ -1014,6 +1035,423 @@ int SmokeApplication::run() {
         }
         timing_stream << " >" << histogram.above_range_count;
         crash_safe_log_.write(foundation::LogLevel::Info, timing_stream.str());
+    }
+
+    {
+        // Phase 9 rail-primitive sanity check. Builds a deterministic L-shaped
+        // rail (straight 10m, right turn, straight 10m), validates frame
+        // construction across the corner, drives a CueScheduler against a
+        // tempo-mapped chart, and confirms the RailChart adapter resolves
+        // cue positions that move toward the judge line as the simulation
+        // tick advances. This proves the lane/rail family modes can reuse
+        // the existing scheduler+scoring contracts before the rail slice
+        // mode lands in a later turn.
+        gameplay::RailPath rail_path{};
+        const bool rail_built = rail_path.rebuild({
+            gameplay::RailPathControlPoint{.position = {0.0f, 0.0f, 0.0f}},
+            gameplay::RailPathControlPoint{.position = {0.0f, 0.0f, 5.0f}},
+            gameplay::RailPathControlPoint{.position = {0.0f, 0.0f, 10.0f}},
+            gameplay::RailPathControlPoint{.position = {5.0f, 0.0f, 10.0f}},
+            gameplay::RailPathControlPoint{.position = {10.0f, 0.0f, 10.0f}},
+        });
+        const gameplay::RailPathSample sample_start = rail_path.sample_at_arc_length(0.0);
+        const gameplay::RailPathSample sample_mid = rail_path.sample_at_arc_length(10.0);
+        const gameplay::RailPathSample sample_end = rail_path.sample_at_arc_length(rail_path.total_length());
+        const gameplay::RailPathSample sample_alpha = rail_path.sample_at_alpha(0.5);
+        const double wrap_negative = rail_path.wrap_arc_length(-3.0);
+        const double wrap_positive = rail_path.wrap_arc_length(rail_path.total_length() + 7.5);
+
+        std::ostringstream rail_stream;
+        rail_stream << std::fixed << std::setprecision(3)
+                    << "Rail path: built=" << rail_built
+                    << " segments=" << rail_path.segment_count()
+                    << " total=" << rail_path.total_length()
+                    << " start-pos=(" << sample_start.position.x << "," << sample_start.position.y
+                    << "," << sample_start.position.z << ")"
+                    << " corner-pos=(" << sample_mid.position.x << "," << sample_mid.position.y
+                    << "," << sample_mid.position.z << ")"
+                    << " end-pos=(" << sample_end.position.x << "," << sample_end.position.y
+                    << "," << sample_end.position.z << ")"
+                    << " alpha-mid-arc=" << sample_alpha.arc_length
+                    << " wrap[-3.0]=" << wrap_negative
+                    << " wrap[+L+7.5]=" << wrap_positive;
+        crash_safe_log_.write(foundation::LogLevel::Info, rail_stream.str());
+
+        // Drive a four-channel chart at 120 BPM through the shared
+        // CueScheduler + RailChart adapter, advancing the transport in
+        // discrete ticks and recording how cues flow toward the judge line.
+        rhythm::TempoMap rail_tempo{};
+        rhythm::TempoMapDefinition rail_tempo_definition{};
+        rail_tempo_definition.config.ticks_per_quarter_note = 480;
+        rail_tempo_definition.config.sample_rate_hz = 48000;
+        rail_tempo_definition.tempo_changes.push_back(
+            rhythm::TempoChange{.start_tick = 0, .microseconds_per_quarter_note = 500000});
+        rail_tempo_definition.time_signature_changes.push_back(
+            rhythm::TimeSignatureChange{.start_tick = 0, .numerator = 4, .denominator = 4});
+        rail_tempo.rebuild(std::move(rail_tempo_definition));
+
+        const std::array<rhythm::ScheduledCue, 4> rail_schedule{{
+            {.hit_tick = 1920, .channel_index = 0},
+            {.hit_tick = 2400, .channel_index = 1},
+            {.hit_tick = 2880, .channel_index = 2},
+            {.hit_tick = 3360, .channel_index = 3},
+        }};
+
+        gameplay::RailChartConfig rail_chart_config{};
+        rail_chart_config.lane_layout = gameplay::RailLaneLayout{
+            .lane_count = 5,
+            .lane_spacing = 1.5,
+            .vertical_offset = 0.0,
+        };
+        rail_chart_config.arc_length_per_tick = 0.005;
+        rail_chart_config.travel_lead_ticks = 1920;
+        rail_chart_config.judge_arc_length = rail_path.total_length();
+
+        const gameplay::RailChart rail_chart =
+            gameplay::make_rail_chart(rail_schedule, rail_chart_config);
+
+        gameplay::CueScheduler rail_scheduler{};
+        std::vector<gameplay::SpatialCueSample> spatial_samples;
+
+        const auto step_scheduler = [&](rhythm::ChartTick tick) {
+            gameplay::TransportSnapshot snapshot{};
+            snapshot.playback_state = gameplay::TransportPlaybackState::Playing;
+            snapshot.position_seconds =
+                static_cast<double>(rail_tempo.microseconds_from_tick(tick)) / 1'000'000.0;
+            gameplay::CueSchedulerUpdateInput input{};
+            input.tempo_map = &rail_tempo;
+            input.transport = &snapshot;
+            input.schedule = std::span<const rhythm::ScheduledCue>(rail_schedule);
+            input.rules = gameplay::CueSchedulerRules{};
+            rail_scheduler.update(input);
+            gameplay::resolve_spatial_cues(
+                rail_chart, rail_path, tick, rail_scheduler.active_cues(), spatial_samples);
+        };
+
+        step_scheduler(0);
+        const std::size_t active_at_t0 = rail_scheduler.summary().active_cue_count;
+        step_scheduler(1920);
+        const std::size_t active_at_first_judge = rail_scheduler.summary().active_cue_count;
+        const double first_distance =
+            spatial_samples.empty() ? 0.0 : spatial_samples.front().distance_to_judge;
+        step_scheduler(2880);
+        const std::size_t active_at_third_judge = rail_scheduler.summary().active_cue_count;
+        const double third_distance =
+            spatial_samples.empty() ? 0.0 : spatial_samples.front().distance_to_judge;
+
+        std::ostringstream chart_stream;
+        chart_stream << std::fixed << std::setprecision(3)
+                     << "Rail chart: cues=" << rail_chart.cues.size()
+                     << " judge-arc=" << rail_chart_config.judge_arc_length
+                     << " active@t0=" << active_at_t0
+                     << " active@first-judge=" << active_at_first_judge
+                     << " first-cue-dist@first-judge=" << first_distance
+                     << " active@third-judge=" << active_at_third_judge
+                     << " first-cue-dist@third-judge=" << third_distance
+                     << " spatial-samples=" << spatial_samples.size();
+        crash_safe_log_.write(foundation::LogLevel::Info, chart_stream.str());
+
+        // Camera rig + parallax sanity. Anchor a rig at the corner and
+        // confirm both the eye and target move along the rail correctly
+        // when the look-at arc length advances. Resolve a 3-layer parallax
+        // stack and confirm the speed scalars produce monotonic offsets.
+        gameplay::RailCameraRig rail_rig{};
+        rail_rig.look_at_arc_length = 12.0;
+        rail_rig.follow_distance = 4.0;
+        rail_rig.lateral_offset = 0.0;
+        rail_rig.vertical_offset = 1.5;
+        const gameplay::RailCameraSample camera = gameplay::sample_rail_camera(rail_path, rail_rig);
+
+        gameplay::ParallaxLayerStack parallax{};
+        parallax.layers = {
+            gameplay::ParallaxLayer{.speed_scalar = 0.25, .base_offset = 0.0},
+            gameplay::ParallaxLayer{.speed_scalar = 0.50, .base_offset = 0.0},
+            gameplay::ParallaxLayer{.speed_scalar = 1.00, .base_offset = 0.0},
+        };
+        std::vector<gameplay::ParallaxLayerSample> parallax_samples;
+        gameplay::sample_parallax_stack(parallax, 8.0, parallax_samples);
+
+        std::ostringstream camera_stream;
+        camera_stream << std::fixed << std::setprecision(3)
+                      << "Rail camera: eye=(" << camera.eye.x << "," << camera.eye.y << ","
+                      << camera.eye.z << ")"
+                      << " target=(" << camera.target.x << "," << camera.target.y << ","
+                      << camera.target.z << ")"
+                      << " up=(" << camera.up.x << "," << camera.up.y << "," << camera.up.z << ")"
+                      << " parallax-layers=" << parallax_samples.size();
+        if (!parallax_samples.empty()) {
+            camera_stream << " parallax-offsets=";
+            for (std::size_t i = 0; i < parallax_samples.size(); ++i) {
+                if (i > 0) {
+                    camera_stream << ",";
+                }
+                camera_stream << parallax_samples[i].offset;
+            }
+        }
+        crash_safe_log_.write(foundation::LogLevel::Info, camera_stream.str());
+    }
+
+    {
+        // Phase 9 rail-obstacle/hit-scan/projectile/env-trigger sanity check.
+        // Builds a small deterministic obstacle field on the same arc-length
+        // axis as the rail above, then exercises every interaction primitive
+        // with closed-form expected results: an overlap query at the player
+        // position, a hit-scan that should pierce one shootable but stop on
+        // the solid behind it, a projectile sweep that should consume one
+        // shootable, and an env-trigger advance that should fire two of three
+        // triggers.
+        gameplay::RailObstacleField obstacle_field{};
+        obstacle_field.rebuild({
+            // Hazard at arc 5, lanes [-1..+1], half-extent 1m.
+            gameplay::RailObstacle{
+                .obstacle_id = 100,
+                .arc_length = 5.0,
+                .arc_length_half_extent = 1.0,
+                .signed_lane_min = -1,
+                .signed_lane_max = 1,
+                .flags = static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Hazard) |
+                         gameplay::RailObstacleFlag::Solid,
+            },
+            // Shootable target at arc 12, lane 0 only.
+            gameplay::RailObstacle{
+                .obstacle_id = 101,
+                .arc_length = 12.0,
+                .arc_length_half_extent = 0.5,
+                .signed_lane_min = 0,
+                .signed_lane_max = 0,
+                .flags = static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Shootable),
+            },
+            // Solid wall at arc 16, lane 0, blocks pierce.
+            gameplay::RailObstacle{
+                .obstacle_id = 102,
+                .arc_length = 16.0,
+                .arc_length_half_extent = 0.75,
+                .signed_lane_min = 0,
+                .signed_lane_max = 0,
+                .flags = static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Solid) |
+                         gameplay::RailObstacleFlag::Shootable,
+            },
+            // Pickup off to the right side at arc 20, lane +2.
+            gameplay::RailObstacle{
+                .obstacle_id = 103,
+                .arc_length = 20.0,
+                .arc_length_half_extent = 0.5,
+                .signed_lane_min = 2,
+                .signed_lane_max = 2,
+                .flags = static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Pickup),
+            },
+        });
+
+        // Player overlap query at arc 5.5 lane 0 — should hit the hazard at
+        // arc 5 (extent 1m -> covers [4..6]) but nothing else.
+        std::vector<std::size_t> overlap_at_5p5;
+        obstacle_field.query_overlap_point(5.5, 0, overlap_at_5p5);
+        // And at arc 5.5 lane +3 — out of any obstacle's lane range.
+        std::vector<std::size_t> overlap_at_5p5_lane3;
+        obstacle_field.query_overlap_point(5.5, 3, overlap_at_5p5_lane3);
+
+        // Hit-scan from arc 8 lane 0, range 20m, pierce 2: should hit the
+        // shootable at arc 12 (distance 3.5 from leading edge) and then be
+        // stopped by the solid wall at arc 16 even though pierce was set.
+        gameplay::RailHitScanProbe probe{};
+        probe.origin_arc_length = 8.0;
+        probe.origin_signed_lane = 0;
+        probe.max_distance = 20.0;
+        probe.pierce_count = 2;
+        probe.required_flag_mask =
+            static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Shootable);
+        std::vector<gameplay::RailHitScanHit> hit_scan_hits;
+        gameplay::resolve_hit_scan(obstacle_field, probe, hit_scan_hits);
+
+        // Projectile sweep: one projectile starting at arc 9, lane 0,
+        // travelling at 60 m/s for one fixed step of 1/120s = 0.5m. Should
+        // not yet reach the shootable at arc 12. Bump speed and step again.
+        std::vector<gameplay::RailProjectile> projectiles{
+            gameplay::RailProjectile{
+                .projectile_id = 9000,
+                .arc_length = 9.0,
+                .signed_lane = 0,
+                .speed = 6000.0,             // Force a wide sweep this step.
+                .remaining_lifetime = 1.0,
+                .pierce_remaining = 0,
+                .damage = 1,
+                .active = true,
+            },
+        };
+        std::vector<gameplay::RailProjectileHit> projectile_hits;
+        gameplay::advance_projectiles(projectiles, obstacle_field, 1.0 / 120.0, projectile_hits);
+
+        // Env triggers: three triggers at arcs 4, 10, 18. Advancing the
+        // player to arc 12 should fire the first two; advancing to arc 25
+        // should fire the third.
+        gameplay::RailEnvTriggerStream env_stream{};
+        env_stream.rebuild({
+            gameplay::RailEnvTrigger{.trigger_id = 1, .arc_length = 4.0, .kind_tag = 1},
+            gameplay::RailEnvTrigger{.trigger_id = 2, .arc_length = 10.0, .kind_tag = 2},
+            gameplay::RailEnvTrigger{.trigger_id = 3, .arc_length = 18.0, .kind_tag = 1},
+        });
+        std::vector<gameplay::RailEnvTrigger> fired_first_pass;
+        env_stream.advance_to_arc_length(12.0, fired_first_pass);
+        const std::size_t fired_after_first = env_stream.fired_count();
+        std::vector<gameplay::RailEnvTrigger> fired_second_pass;
+        env_stream.advance_to_arc_length(25.0, fired_second_pass);
+
+        std::ostringstream obstacle_stream;
+        obstacle_stream << std::fixed << std::setprecision(3)
+                        << "Rail obstacles: count=" << obstacle_field.size()
+                        << " overlap@5.5/lane0=" << overlap_at_5p5.size()
+                        << " overlap@5.5/lane3=" << overlap_at_5p5_lane3.size()
+                        << " hit-scan=" << hit_scan_hits.size();
+        if (!hit_scan_hits.empty()) {
+            obstacle_stream << " first-hit-id=" << hit_scan_hits.front().obstacle_id
+                            << " first-hit-dist=" << hit_scan_hits.front().distance;
+        }
+        if (hit_scan_hits.size() >= 2) {
+            obstacle_stream << " second-hit-id=" << hit_scan_hits[1].obstacle_id;
+        }
+        obstacle_stream << " projectile-hits=" << projectile_hits.size();
+        if (!projectile_hits.empty()) {
+            obstacle_stream << " proj-first-id=" << projectile_hits.front().obstacle_id;
+        }
+        obstacle_stream << " env-fired-pass1=" << fired_first_pass.size()
+                        << " env-cursor-after-pass1=" << fired_after_first
+                        << " env-fired-pass2=" << fired_second_pass.size()
+                        << " env-cursor-final=" << env_stream.fired_count();
+        crash_safe_log_.write(foundation::LogLevel::Info, obstacle_stream.str());
+    }
+
+    {
+        // Phase 9 stress test for the rail-family engine primitives. Builds
+        // a large obstacle field (1024 obstacles fanned across 5 lanes), a
+        // burst of projectiles, and a long ordered env-trigger stream, then
+        // drives a fixed number of simulation steps and reports timing +
+        // counts. Verifies the shared engine stack handles dense patterns
+        // and rapid camera/state transitions without correctness regressions.
+        constexpr std::size_t k_stress_obstacles = 1024;
+        constexpr std::size_t k_stress_projectiles = 64;
+        constexpr std::size_t k_stress_env_triggers = 256;
+        constexpr std::size_t k_stress_steps = 1000;
+        constexpr double k_stress_player_velocity = 24.0;        // m/s.
+        constexpr double k_stress_fixed_delta = 1.0 / 240.0;     // 240 Hz sim.
+        constexpr double k_stress_arc_per_obstacle = 0.5;        // 1024 * 0.5 = 512m.
+
+        std::vector<gameplay::RailObstacle> stress_obstacles;
+        stress_obstacles.reserve(k_stress_obstacles);
+        for (std::size_t i = 0; i < k_stress_obstacles; ++i) {
+            const std::int32_t lane = static_cast<std::int32_t>(i % 5u) - 2;
+            const std::uint32_t flags = (i % 4u == 0u)
+                ? static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Hazard) |
+                      gameplay::RailObstacleFlag::Solid
+                : (i % 4u == 1u)
+                      ? static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Pickup)
+                      : static_cast<std::uint32_t>(gameplay::RailObstacleFlag::Shootable);
+            stress_obstacles.push_back(gameplay::RailObstacle{
+                .obstacle_id = static_cast<std::uint64_t>(0x10000u + i),
+                .arc_length = 1.0 + static_cast<double>(i) * k_stress_arc_per_obstacle,
+                .arc_length_half_extent = 0.20,
+                .signed_lane_min = lane,
+                .signed_lane_max = lane,
+                .flags = flags,
+                .hit_points = 1u,
+            });
+        }
+        gameplay::RailObstacleField stress_field{};
+        stress_field.rebuild(std::move(stress_obstacles));
+
+        std::vector<gameplay::RailProjectile> stress_projectiles;
+        stress_projectiles.reserve(k_stress_projectiles);
+        for (std::size_t i = 0; i < k_stress_projectiles; ++i) {
+            stress_projectiles.push_back(gameplay::RailProjectile{
+                .projectile_id = static_cast<std::uint64_t>(0x20000u + i),
+                .arc_length = 1.0,
+                .signed_lane = static_cast<std::int32_t>(i % 5u) - 2,
+                .speed = 80.0,
+                .remaining_lifetime = 5.0,
+                .pierce_remaining = 1u,
+                .damage = 1u,
+                .active = true,
+            });
+        }
+
+        std::vector<gameplay::RailEnvTrigger> stress_triggers;
+        stress_triggers.reserve(k_stress_env_triggers);
+        for (std::size_t i = 0; i < k_stress_env_triggers; ++i) {
+            stress_triggers.push_back(gameplay::RailEnvTrigger{
+                .trigger_id = static_cast<std::uint64_t>(0x30000u + i),
+                .arc_length = 2.0 + static_cast<double>(i) * 2.0,
+                .kind_tag = static_cast<std::uint32_t>(i % 3u),
+            });
+        }
+        gameplay::RailEnvTriggerStream stress_stream{};
+        stress_stream.rebuild(std::move(stress_triggers));
+
+        std::vector<gameplay::RailProjectileHit> projectile_hit_buffer;
+        std::vector<std::size_t> overlap_buffer;
+        std::vector<gameplay::RailEnvTrigger> trigger_buffer;
+        std::uint64_t total_projectile_hits = 0;
+        std::uint64_t total_obstacles_destroyed = 0;
+        std::uint64_t total_overlap_returns = 0;
+        std::uint64_t total_triggers_fired = 0;
+        std::uint64_t total_alive_projectiles = 0;
+        double player_arc = 0.0;
+
+        const auto stress_start = std::chrono::steady_clock::now();
+        for (std::size_t step = 0; step < k_stress_steps; ++step) {
+            player_arc += k_stress_player_velocity * k_stress_fixed_delta;
+
+            projectile_hit_buffer.clear();
+            gameplay::advance_projectiles(
+                stress_projectiles, stress_field, k_stress_fixed_delta, projectile_hit_buffer);
+            total_projectile_hits += projectile_hit_buffer.size();
+            // Simulate consumption of shootable hits through the field's
+            // HP API so the field state evolves through the run, not a
+            // frozen layout. register_hit returns true only on the
+            // alive->destroyed transition; total_obstacles_destroyed
+            // therefore counts unique kills, not chip damage.
+            for (const gameplay::RailProjectileHit& hit : projectile_hit_buffer) {
+                if (stress_field.register_hit(hit.obstacle_index, hit.damage)) {
+                    ++total_obstacles_destroyed;
+                }
+            }
+            // Sweep the player's lane for overlap (any of the 5 lanes,
+            // rotating each step to model rapid lane swaps).
+            const std::int32_t player_lane = static_cast<std::int32_t>(step % 5u) - 2;
+            overlap_buffer.clear();
+            stress_field.query_overlap_point(player_arc, player_lane, overlap_buffer);
+            total_overlap_returns += overlap_buffer.size();
+
+            trigger_buffer.clear();
+            stress_stream.advance_to_arc_length(player_arc, trigger_buffer);
+            total_triggers_fired += trigger_buffer.size();
+
+            for (const gameplay::RailProjectile& projectile : stress_projectiles) {
+                if (projectile.active) {
+                    ++total_alive_projectiles;
+                }
+            }
+        }
+        const auto stress_end = std::chrono::steady_clock::now();
+        const auto stress_duration_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(stress_end - stress_start).count();
+        const double stress_duration_ms = static_cast<double>(stress_duration_ns) / 1'000'000.0;
+        const double stress_per_step_us =
+            (static_cast<double>(stress_duration_ns) / static_cast<double>(k_stress_steps)) / 1000.0;
+
+        std::ostringstream stress_stream_log;
+        stress_stream_log << std::fixed << std::setprecision(3)
+                          << "Rail stress: obstacles=" << k_stress_obstacles
+                          << " projectiles=" << k_stress_projectiles
+                          << " triggers=" << k_stress_env_triggers
+                          << " steps=" << k_stress_steps
+                          << " duration-ms=" << stress_duration_ms
+                          << " per-step-us=" << stress_per_step_us
+                          << " projectile-hits=" << total_projectile_hits
+                          << " obstacles-destroyed=" << total_obstacles_destroyed
+                          << " overlap-returns=" << total_overlap_returns
+                          << " triggers-fired=" << total_triggers_fired
+                          << " final-cursor=" << stress_stream.fired_count()
+                          << " alive-projectile-samples=" << total_alive_projectiles;
+        crash_safe_log_.write(foundation::LogLevel::Info, stress_stream_log.str());
     }
 
     if (hot_reload_controller.summary().enabled) {

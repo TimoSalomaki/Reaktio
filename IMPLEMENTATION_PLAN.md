@@ -269,14 +269,14 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 9 - Vertical Slice B: Rail, Lane, and Runner-Style Mode
 
-- [ ] Implement path or rail abstractions that can drive player motion, enemies, and note carriers.
-- [ ] Add 2.5D camera rails, parallax layers, and billboarded or mixed 2D and 3D presentation.
-- [ ] Implement obstacle spawning, trigger volumes, and deterministic collision checks.
-- [ ] Implement hit-scan, projectile, or target-interaction modules for shooter-like gameplay.
-- [ ] Add mode rules for dodge, shoot, lane-swap, jump, slide, or hold interactions.
-- [ ] Add synchronized environment triggers for lights, hazards, and camera pulses.
-- [ ] Validate that lane-based and scrolling modes can reuse the same rhythm scheduler and scoring contracts.
-- [ ] Stress-test this slice with dense patterns, large obstacle counts, and rapid camera transitions.
+- [x] Implement path or rail abstractions that can drive player motion, enemies, and note carriers.
+- [x] Add 2.5D camera rails, parallax layers, and billboarded or mixed 2D and 3D presentation.
+- [x] Implement obstacle spawning, trigger volumes, and deterministic collision checks.
+- [x] Implement hit-scan, projectile, or target-interaction modules for shooter-like gameplay.
+- [x] Add mode rules for dodge, shoot, lane-swap, jump, slide, or hold interactions.
+- [x] Add synchronized environment triggers for lights, hazards, and camera pulses.
+- [x] Validate that lane-based and scrolling modes can reuse the same rhythm scheduler and scoring contracts.
+- [x] Stress-test this slice with dense patterns, large obstacle counts, and rapid camera transitions.
 
 ### Phase 10 - Vertical Slice C: Spatial 3D and Obstacle-Heavy Mode
 
