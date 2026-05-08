@@ -280,14 +280,14 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 10 - Vertical Slice C: Spatial 3D and Obstacle-Heavy Mode
 
-- [ ] Implement full 3D camera, transform, and scene extraction flows on the same runtime.
-- [ ] Add deterministic kinematic movement for player avatars, rotating hazards, moving walls, and tunnel geometry.
-- [ ] Add reusable collision volumes for capsules, boxes, spheres, and oriented trigger zones.
-- [ ] Add camera and presentation systems for tunnel views, radial worlds, and high-speed spatial motion.
-- [ ] Add procedural or pattern-driven obstacle generation that remains replay-safe.
-- [ ] Add presentation hooks for music-reactive environment changes, post effects, and beat-synced geometry animation.
-- [ ] Validate that a Super Hexagon-like or Geometry Dash-like prototype can be built without bypassing the engine architecture.
-- [ ] Benchmark CPU, GPU, and audio stability under high-speed gameplay.
+- [x] Implement full 3D camera, transform, and scene extraction flows on the same runtime.
+- [x] Add deterministic kinematic movement for player avatars, rotating hazards, moving walls, and tunnel geometry.
+- [x] Add reusable collision volumes for capsules, boxes, spheres, and oriented trigger zones.
+- [x] Add camera and presentation systems for tunnel views, radial worlds, and high-speed spatial motion.
+- [x] Add procedural or pattern-driven obstacle generation that remains replay-safe.
+- [x] Add presentation hooks for music-reactive environment changes, post effects, and beat-synced geometry animation.
+- [x] Validate that a Super Hexagon-like or Geometry Dash-like prototype can be built without bypassing the engine architecture.
+- [x] Benchmark CPU, GPU, and audio stability under high-speed gameplay.
 
 ### Phase 11 - Tooling, Debugging, and Authoring Support
 

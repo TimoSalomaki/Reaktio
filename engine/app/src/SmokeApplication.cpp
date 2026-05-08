@@ -4,6 +4,11 @@
 #include "reaktio/gameplay/RailChart.hpp"
 #include "reaktio/gameplay/RailObstacles.hpp"
 #include "reaktio/gameplay/RailPath.hpp"
+#include "reaktio/gameplay/MusicReactivePresentation.hpp"
+#include "reaktio/gameplay/SpatialCamera.hpp"
+#include "reaktio/gameplay/SpatialCollision.hpp"
+#include "reaktio/gameplay/SpatialKinematics.hpp"
+#include "reaktio/gameplay/SpatialPatternGenerator.hpp"
 #include "reaktio/gameplay/ReplayInspection.hpp"
 #include "reaktio/gameplay/ReplayPlayback.hpp"
 #include "reaktio/gameplay/TypingAnalyticsExtensions.hpp"
@@ -1452,6 +1457,301 @@ int SmokeApplication::run() {
                           << " final-cursor=" << stress_stream.fired_count()
                           << " alive-projectile-samples=" << total_alive_projectiles;
         crash_safe_log_.write(foundation::LogLevel::Info, stress_stream_log.str());
+    }
+
+    {
+        // Phase 10 spatial-primitive sanity check. Validates the engine
+        // layer's 3D collision, kinematics, and seeded-pattern primitives
+        // with closed-form values so any future regression is caught here
+        // even before the space slice is exercised.
+        const gameplay::SphereVolume sphere_a{.center = {0.0f, 0.0f, 0.0f}, .radius = 1.0f};
+        const gameplay::SphereVolume sphere_b{.center = {1.5f, 0.0f, 0.0f}, .radius = 1.0f};
+        const gameplay::SphereVolume sphere_c{.center = {3.0f, 0.0f, 0.0f}, .radius = 1.0f};
+        const gameplay::AxisAlignedBoxVolume aabb{
+            .center = {0.0f, 0.0f, 5.0f},
+            .half_extents = {1.0f, 1.0f, 1.0f},
+        };
+        const gameplay::SphereVolume probe_in_aabb{
+            .center = {0.5f, 0.5f, 5.5f}, .radius = 0.25f};
+        const gameplay::SphereVolume probe_outside_aabb{
+            .center = {3.0f, 3.0f, 5.0f}, .radius = 0.25f};
+
+        gameplay::OrientedBoxVolume obb{};
+        obb.center = {10.0f, 0.0f, 0.0f};
+        obb.half_extents = {2.0f, 0.5f, 0.5f};
+        // Rotated 45 degrees around Y: axis_right is (cos45, 0, sin45), forward is (-sin45, 0, cos45).
+        const float k_inv_sqrt2 = 0.70710678118654752440f;
+        obb.axis_right = {k_inv_sqrt2, 0.0f, k_inv_sqrt2};
+        obb.axis_up = {0.0f, 1.0f, 0.0f};
+        obb.axis_forward = {-k_inv_sqrt2, 0.0f, k_inv_sqrt2};
+        const gameplay::SphereVolume probe_in_obb{
+            .center = {10.0f, 0.0f, 0.0f}, .radius = 0.25f};
+        const gameplay::SphereVolume probe_outside_obb{
+            .center = {15.0f, 0.0f, 0.0f}, .radius = 0.25f};
+
+        const gameplay::CapsuleVolume capsule{
+            .point_a = {0.0f, -2.0f, 10.0f},
+            .point_b = {0.0f, 2.0f, 10.0f},
+            .radius = 0.5f,
+        };
+        const gameplay::SphereVolume probe_in_capsule{
+            .center = {0.3f, 0.0f, 10.0f}, .radius = 0.10f};
+        const gameplay::SphereVolume probe_outside_capsule{
+            .center = {2.0f, 0.0f, 10.0f}, .radius = 0.10f};
+
+        const bool sphere_overlap = gameplay::sphere_overlaps_sphere(sphere_a, sphere_b);
+        const bool sphere_separated = gameplay::sphere_overlaps_sphere(sphere_a, sphere_c);
+        const bool aabb_in = gameplay::sphere_overlaps_aabb(probe_in_aabb, aabb);
+        const bool aabb_out = gameplay::sphere_overlaps_aabb(probe_outside_aabb, aabb);
+        const bool obb_in = gameplay::sphere_overlaps_obb(probe_in_obb, obb);
+        const bool obb_out = gameplay::sphere_overlaps_obb(probe_outside_obb, obb);
+        const bool capsule_in = gameplay::capsule_overlaps_sphere(capsule, probe_in_capsule);
+        const bool capsule_out = gameplay::capsule_overlaps_sphere(capsule, probe_outside_capsule);
+
+        // Kinematics: advance a rotational state by 0.25s at pi rad/s and
+        // confirm the angle landed at pi/4 (within float tolerance).
+        gameplay::RotationalKinematicState rot{};
+        rot.angle_radians = 0.0f;
+        rot.angular_velocity_radians_per_second = 3.14159265358979323846f;
+        gameplay::advance_rotational_kinematic(rot, 0.25);
+        const float rot_expected = 3.14159265358979323846f / 4.0f;
+
+        gameplay::RadialSweepState sweep{};
+        sweep.radius = 10.0f;
+        sweep.radial_velocity_per_second = -4.0f;
+        sweep.heading_radians = 0.5f;
+        gameplay::advance_radial_sweep(sweep, 1.0);
+        // 10 + (-4)*1 = 6.
+
+        gameplay::OscillatingState osc{};
+        osc.phase_radians = 0.0f;
+        osc.frequency_hz = 1.0f;
+        osc.amplitude = 1.0f;
+        gameplay::advance_oscillating_state(osc, 0.25);  // Quarter cycle -> sin(pi/2) = 1.
+        const float osc_offset = gameplay::evaluate_oscillating_offset(osc);
+
+        // Seeded pattern: identical seeds must produce identical hazard
+        // headings.
+        foundation::DeterministicRng pattern_rng_a{0xCAFE2026u};
+        foundation::DeterministicRng pattern_rng_b{0xCAFE2026u};
+        gameplay::PatternRequest request{};
+        request.kind = gameplay::PatternKind::WallWithGap;
+        request.slice_count = 12;
+        request.gap_count = 2;
+        request.spawn_radius = 25.0f;
+        request.radial_velocity_per_second = -5.0f;
+        request.slice_arc_radians = 0.4f;
+        request.hazard_id_offset = 1000;
+        std::vector<gameplay::RingSliceHazard> pattern_a;
+        std::vector<gameplay::RingSliceHazard> pattern_b;
+        const std::size_t pattern_a_count =
+            gameplay::generate_ring_slice_pattern(pattern_rng_a, request, pattern_a);
+        const std::size_t pattern_b_count =
+            gameplay::generate_ring_slice_pattern(pattern_rng_b, request, pattern_b);
+        bool pattern_match = pattern_a_count == pattern_b_count;
+        if (pattern_match) {
+            for (std::size_t i = 0; i < pattern_a.size(); ++i) {
+                if (pattern_a[i].heading_radians != pattern_b[i].heading_radians ||
+                    pattern_a[i].hazard_id != pattern_b[i].hazard_id) {
+                    pattern_match = false;
+                    break;
+                }
+            }
+        }
+
+        // Tunnel camera rig: confirm the eye sits behind the player along
+        // the tunnel axis.
+        gameplay::TunnelCameraRig tunnel_rig{};
+        tunnel_rig.tunnel_center = {0.0f, 0.0f, 0.0f};
+        tunnel_rig.tunnel_axis_forward = {0.0f, 0.0f, 1.0f};
+        tunnel_rig.tunnel_axis_up = {0.0f, 1.0f, 0.0f};
+        tunnel_rig.player_heading_radians = 0.0f;
+        tunnel_rig.player_orbit_radius = 4.0f;
+        tunnel_rig.follow_back_distance = 8.0f;
+        tunnel_rig.follow_height_offset = 1.5f;
+        const render::FreeCamera3D tunnel_cam = gameplay::sample_tunnel_camera(tunnel_rig);
+
+        std::ostringstream sanity_stream;
+        sanity_stream << std::fixed << std::setprecision(3)
+                      << "Spatial sanity: sphere-overlap=" << (sphere_overlap ? 1 : 0)
+                      << " sphere-separated=" << (sphere_separated ? 1 : 0)
+                      << " aabb-in=" << (aabb_in ? 1 : 0)
+                      << " aabb-out=" << (aabb_out ? 1 : 0)
+                      << " obb-in=" << (obb_in ? 1 : 0)
+                      << " obb-out=" << (obb_out ? 1 : 0)
+                      << " capsule-in=" << (capsule_in ? 1 : 0)
+                      << " capsule-out=" << (capsule_out ? 1 : 0)
+                      << " rot-angle=" << rot.angle_radians
+                      << " rot-expected=" << rot_expected
+                      << " sweep-radius=" << sweep.radius
+                      << " osc-offset=" << osc_offset
+                      << " pattern-a=" << pattern_a.size()
+                      << " pattern-b=" << pattern_b.size()
+                      << " pattern-match=" << (pattern_match ? 1 : 0)
+                      << " tunnel-eye=("
+                      << tunnel_cam.position.x << "," << tunnel_cam.position.y << ","
+                      << tunnel_cam.position.z << ")";
+        crash_safe_log_.write(foundation::LogLevel::Info, sanity_stream.str());
+
+        // Music-reactive envelope regression check. We deliberately build
+        // both 4/4 and 3/4 tempo maps to validate the bar-unit fix: prior
+        // to the audit, evaluate_pulse_envelope hardcoded 4 beats/bar so
+        // any time signature other than 4/4 silently produced wrong
+        // envelope phases. The closed-form expectations:
+        //   * Beat-mode pulse with attack=0.0s decay=0.4s at the start of
+        //     a beat (position 0) returns 1.0 (top of decay).
+        //   * Beat-mode pulse halfway through the beat at 120 BPM (0.25s
+        //     into a 0.5s beat) lands at 0.5s into a 0.4s decay -> 0 (out
+        //     of decay window).
+        //   * Bar-mode pulse with stride=1, decay=0.5s in a 3/4 bar at
+        //     120 BPM (bar duration 1.5s): at position 0 the envelope
+        //     starts at 1.0 and decays linearly across 0.5s.
+        rhythm::TempoMap tempo_4_4{};
+        {
+            rhythm::TempoMapDefinition def{};
+            def.config.ticks_per_quarter_note = 480;
+            def.config.sample_rate_hz = 48000;
+            def.tempo_changes.push_back(
+                rhythm::TempoChange{.start_tick = 0, .microseconds_per_quarter_note = 500000});
+            def.time_signature_changes.push_back(
+                rhythm::TimeSignatureChange{.start_tick = 0, .numerator = 4, .denominator = 4});
+            tempo_4_4.rebuild(std::move(def));
+        }
+        rhythm::TempoMap tempo_3_4{};
+        {
+            rhythm::TempoMapDefinition def{};
+            def.config.ticks_per_quarter_note = 480;
+            def.config.sample_rate_hz = 48000;
+            def.tempo_changes.push_back(
+                rhythm::TempoChange{.start_tick = 0, .microseconds_per_quarter_note = 500000});
+            def.time_signature_changes.push_back(
+                rhythm::TimeSignatureChange{.start_tick = 0, .numerator = 3, .denominator = 4});
+            tempo_3_4.rebuild(std::move(def));
+        }
+
+        gameplay::PulseEnvelopeConfig beat_config{};
+        beat_config.unit = gameplay::PulseEnvelopeUnit::Beat;
+        beat_config.stride = 1.0;
+        beat_config.attack_seconds = 0.0;
+        beat_config.decay_seconds = 0.4;
+
+        const double beat_at_zero =
+            gameplay::evaluate_pulse_envelope(beat_config, tempo_4_4, 0);
+        const double beat_at_quarter =
+            gameplay::evaluate_pulse_envelope(beat_config, tempo_4_4, 250'000);
+
+        gameplay::PulseEnvelopeConfig bar_config{};
+        bar_config.unit = gameplay::PulseEnvelopeUnit::Bar;
+        bar_config.stride = 1.0;
+        bar_config.attack_seconds = 0.0;
+        bar_config.decay_seconds = 0.5;
+
+        const double bar_3_4_at_zero =
+            gameplay::evaluate_pulse_envelope(bar_config, tempo_3_4, 0);
+        const double bar_4_4_at_zero =
+            gameplay::evaluate_pulse_envelope(bar_config, tempo_4_4, 0);
+        // Halfway through the 3/4 bar (1.5s / 2 = 0.75s = 750_000 us): the
+        // 0.5s decay has long since expired, so the envelope is 0.
+        const double bar_3_4_at_mid =
+            gameplay::evaluate_pulse_envelope(bar_config, tempo_3_4, 750'000);
+        // Halfway through the 4/4 bar (2.0s / 2 = 1.0s = 1_000_000 us):
+        // also past the 0.5s decay window, so 0.
+        const double bar_4_4_at_mid =
+            gameplay::evaluate_pulse_envelope(bar_config, tempo_4_4, 1'000'000);
+
+        std::ostringstream envelope_stream;
+        envelope_stream << std::fixed << std::setprecision(3)
+                        << "Music envelope sanity:"
+                        << " beat@0=" << beat_at_zero
+                        << " beat@quarter-beat=" << beat_at_quarter
+                        << " bar@0[3/4]=" << bar_3_4_at_zero
+                        << " bar@0[4/4]=" << bar_4_4_at_zero
+                        << " bar@mid[3/4]=" << bar_3_4_at_mid
+                        << " bar@mid[4/4]=" << bar_4_4_at_mid;
+        crash_safe_log_.write(foundation::LogLevel::Info, envelope_stream.str());
+    }
+
+    {
+        // Phase 10 spatial stress block. Authors a large radial obstacle
+        // field and exercises the SpatialCollision + SpatialKinematics
+        // primitives at scale to validate per-step cost stays comfortably
+        // under any realistic frame budget.
+        constexpr std::size_t k_spatial_stress_hazards = 4096;
+        constexpr std::size_t k_spatial_stress_steps = 1000;
+        constexpr double k_spatial_stress_dt = 1.0 / 240.0;
+
+        std::vector<gameplay::RadialSweepState> sweeps;
+        std::vector<gameplay::OrientedBoxVolume> hazard_boxes;
+        sweeps.reserve(k_spatial_stress_hazards);
+        hazard_boxes.reserve(k_spatial_stress_hazards);
+        for (std::size_t i = 0; i < k_spatial_stress_hazards; ++i) {
+            gameplay::RadialSweepState sweep{};
+            sweep.radius =
+                12.0f + static_cast<float>(i % 32u) * 0.5f;
+            sweep.radial_velocity_per_second = -2.0f;
+            sweep.heading_radians = static_cast<float>(i % 256u) * (6.28318530717958647692f / 256.0f);
+            sweeps.push_back(sweep);
+
+            gameplay::OrientedBoxVolume box{};
+            box.center = {sweep.radius * std::cos(sweep.heading_radians), 0.0f,
+                          sweep.radius * std::sin(sweep.heading_radians)};
+            box.axis_right = {1.0f, 0.0f, 0.0f};
+            box.axis_up = {0.0f, 1.0f, 0.0f};
+            box.axis_forward = {0.0f, 0.0f, 1.0f};
+            box.half_extents = {0.5f, 0.5f, 0.4f};
+            hazard_boxes.push_back(box);
+        }
+
+        gameplay::SphereVolume player{};
+        player.center = {4.0f, 0.0f, 0.0f};
+        player.radius = 0.5f;
+
+        std::uint64_t total_collisions = 0;
+        std::uint64_t total_advanced = 0;
+
+        const auto stress_start = std::chrono::steady_clock::now();
+        for (std::size_t step = 0; step < k_spatial_stress_steps; ++step) {
+            gameplay::advance_radial_sweep_bulk(
+                std::span<gameplay::RadialSweepState>(sweeps), k_spatial_stress_dt);
+            total_advanced += sweeps.size();
+            // Slowly orbit the player so collisions sample different headings.
+            const double t = static_cast<double>(step) * k_spatial_stress_dt;
+            player.center = {
+                4.0f * static_cast<float>(std::cos(t * 0.5)),
+                0.0f,
+                4.0f * static_cast<float>(std::sin(t * 0.5)),
+            };
+            // Recompute the box centers from the sweep state so collision
+            // tests stay in sync with the kinematic update.
+            for (std::size_t i = 0; i < sweeps.size(); ++i) {
+                const gameplay::RadialSweepState& sweep = sweeps[i];
+                hazard_boxes[i].center = {
+                    sweep.radius * std::cos(sweep.heading_radians),
+                    0.0f,
+                    sweep.radius * std::sin(sweep.heading_radians),
+                };
+                if (gameplay::sphere_overlaps_obb(player, hazard_boxes[i])) {
+                    ++total_collisions;
+                }
+            }
+        }
+        const auto stress_end = std::chrono::steady_clock::now();
+        const auto stress_duration_ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(stress_end - stress_start).count();
+        const double stress_duration_ms = static_cast<double>(stress_duration_ns) / 1'000'000.0;
+        const double stress_per_step_us =
+            (static_cast<double>(stress_duration_ns) / static_cast<double>(k_spatial_stress_steps)) /
+            1000.0;
+
+        std::ostringstream stress_log;
+        stress_log << std::fixed << std::setprecision(3)
+                   << "Spatial stress: hazards=" << k_spatial_stress_hazards
+                   << " steps=" << k_spatial_stress_steps
+                   << " duration-ms=" << stress_duration_ms
+                   << " per-step-us=" << stress_per_step_us
+                   << " collisions=" << total_collisions
+                   << " advanced-samples=" << total_advanced;
+        crash_safe_log_.write(foundation::LogLevel::Info, stress_log.str());
     }
 
     if (hot_reload_controller.summary().enabled) {

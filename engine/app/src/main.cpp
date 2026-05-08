@@ -3,6 +3,7 @@
 
 #include "reaktio/games/rail_slice/RailSliceMode.hpp"
 #include "reaktio/games/reference/ReferenceSandboxMode.hpp"
+#include "reaktio/games/space_slice/SpaceSliceMode.hpp"
 #include "reaktio/games/templates/StarterMode.hpp"
 #include "reaktio/games/typing_slice/TypingSliceMode.hpp"
 #include "reaktio/platform/StackProbe.hpp"
@@ -24,6 +25,9 @@ int main() {
         return 1;
     }
     if (!game_mode_registry.register_mode<reaktio::games::rail_slice::RailSliceMode>()) {
+        return 1;
+    }
+    if (!game_mode_registry.register_mode<reaktio::games::space_slice::SpaceSliceMode>()) {
         return 1;
     }
 
@@ -194,6 +198,80 @@ int main() {
             return extra.str();
         };
         dependencies.post_shutdown_dry_runs.push_back(std::move(rail_entry));
+    }
+
+    {
+        // Space slice dry-run. Mirrors the rail slice pattern but exercises
+        // the spatial primitives: deterministic ring-slice patterns, radial
+        // sweeps, sphere-vs-OBB collision, FreeCamera3D extraction, and
+        // music-reactive presentation envelopes. The scripted journey
+        // simply sweeps the player around the orbit ring so hazards reach
+        // the player on different headings and exercise both the "hit"
+        // and "avoided" judgement branches.
+        reaktio::games::space_slice::SpaceSliceConfig space_dry_run_config{};
+        space_dry_run_config.record_replay_samples = false;
+        // Speed the slice up so the dry-run actually finishes inside the
+        // scripted budget. Default play sessions keep the slower velocity.
+        space_dry_run_config.player_orbit_speed_radians_per_second = 8.0f;
+        space_dry_run_config.pattern_request_count = 4;
+        reaktio::app::SmokeApplicationDependencies::PostShutdownDryRunEntry space_entry{};
+        space_entry.mode = std::make_unique<reaktio::games::space_slice::SpaceSliceMode>(
+            std::move(space_dry_run_config));
+        space_entry.label = "space-slice-shared-stack-validation";
+        const auto push_action = [&](std::string_view action_id, bool pressed, bool down) {
+            reaktio::app::SmokeApplicationDependencies::PostShutdownScriptedFrame frame{};
+            frame.action_context_id = std::string(reaktio::games::space_slice::k_space_action_context);
+            frame.action_id = std::string(action_id);
+            frame.action_pressed = pressed;
+            frame.action_down = down || pressed;
+            space_entry.scripted_frames.push_back(std::move(frame));
+        };
+        const auto push_idle = [&]() {
+            reaktio::app::SmokeApplicationDependencies::PostShutdownScriptedFrame frame{};
+            space_entry.scripted_frames.push_back(std::move(frame));
+        };
+        // Orbit right -> idle -> orbit left -> idle pattern. Each block is
+        // long enough for several patterns of hazards to sweep through.
+        for (int phase = 0; phase < 4; ++phase) {
+            for (int i = 0; i < 60; ++i) {
+                push_action(reaktio::games::space_slice::k_space_action_orbit_right, false, true);
+            }
+            for (int i = 0; i < 60; ++i) {
+                push_idle();
+            }
+            for (int i = 0; i < 60; ++i) {
+                push_action(reaktio::games::space_slice::k_space_action_orbit_left, false, true);
+            }
+            for (int i = 0; i < 60; ++i) {
+                push_idle();
+            }
+        }
+        // Generous tail so all hazards finish their inward sweep.
+        for (int i = 0; i < 600; ++i) {
+            push_idle();
+        }
+        space_entry.verifier =
+            [](const reaktio::gameplay::IGameMode& mode) -> std::string {
+            const auto* slice =
+                dynamic_cast<const reaktio::games::space_slice::SpaceSliceMode*>(&mode);
+            if (slice == nullptr) {
+                return {};
+            }
+            std::ostringstream extra;
+            extra << " patterns=" << slice->pattern_request_count()
+                  << " hazards-authored=" << slice->hazards_authored()
+                  << " hazards-resolved=" << slice->hazards_resolved()
+                  << " hazards-avoided=" << slice->hazards_avoided()
+                  << " hazards-hit=" << slice->hazards_hit()
+                  << " hazards-active=" << slice->hazards_active()
+                  << " presentation-events=" << slice->presentation_events_emitted()
+                  << " beat-pulse=" << slice->last_beat_pulse_value()
+                  << " bar-pulse=" << slice->last_bar_pulse_value()
+                  << " score=" << slice->scoring().summary().score
+                  << " grade=" << reaktio::gameplay::to_string(slice->scoring().summary().grade);
+            return extra.str();
+        };
+        dependencies.post_shutdown_dry_runs.push_back(std::move(space_entry));
     }
 
     reaktio::app::SmokeApplication application{std::move(dependencies)};

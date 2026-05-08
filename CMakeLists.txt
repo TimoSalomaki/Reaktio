@@ -259,6 +259,7 @@ add_library(reaktio_gameplay STATIC
     engine/gameplay/src/ModeFlow.cpp
     engine/gameplay/src/Modifiers.cpp
     engine/gameplay/src/MotionCollision.cpp
+    engine/gameplay/src/MusicReactivePresentation.cpp
     engine/gameplay/src/PresentationEvents.cpp
     engine/gameplay/src/RailChart.cpp
     engine/gameplay/src/RailInteractionRules.cpp
@@ -269,6 +270,10 @@ add_library(reaktio_gameplay STATIC
     engine/gameplay/src/ReplayRecorder.cpp
     engine/gameplay/src/SaveData.cpp
     engine/gameplay/src/Scoring.cpp
+    engine/gameplay/src/SpatialCamera.cpp
+    engine/gameplay/src/SpatialCollision.cpp
+    engine/gameplay/src/SpatialKinematics.cpp
+    engine/gameplay/src/SpatialPatternGenerator.cpp
     engine/gameplay/src/Transforms.cpp
     engine/gameplay/src/TransportController.cpp
     engine/gameplay/src/TypingAnalyticsExtensions.cpp
@@ -402,6 +407,25 @@ target_link_libraries(
 )
 reaktio_configure_target(reaktio_rail_slice_mode)
 
+add_library(reaktio_space_slice_mode STATIC
+    games/space_slice/src/SpaceSliceMode.cpp
+)
+add_library(Reaktio::space_slice_mode ALIAS reaktio_space_slice_mode)
+target_include_directories(reaktio_space_slice_mode
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/games/space_slice/include"
+)
+target_link_libraries(
+    reaktio_space_slice_mode
+    PUBLIC
+        Reaktio::foundation
+        Reaktio::gameplay
+        Reaktio::platform_api
+        Reaktio::rhythm
+        Reaktio::render_api
+)
+reaktio_configure_target(reaktio_space_slice_mode)
+
 add_library(reaktio_app STATIC
     engine/app/src/AuthoritativeAudioTransport.cpp
     engine/app/src/ContentHotReloadController.cpp
@@ -435,6 +459,7 @@ target_link_libraries(
         Reaktio::reference_sandbox_mode
         Reaktio::typing_slice_mode
         Reaktio::rail_slice_mode
+        Reaktio::space_slice_mode
 )
 reaktio_configure_target(reaktio_smoke)
 
