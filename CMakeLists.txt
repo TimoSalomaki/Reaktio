@@ -210,13 +210,13 @@ reaktio_configure_target(reaktio_content_cooker)
 add_executable(reaktio_content_validator
     tools/content_validator.cpp
 )
-target_link_libraries(reaktio_content_validator PRIVATE Reaktio::content Reaktio::foundation)
+target_link_libraries(reaktio_content_validator PRIVATE Reaktio::content Reaktio::foundation Reaktio::tools)
 reaktio_configure_target(reaktio_content_validator)
 
 add_executable(reaktio_chart_preview
     tools/chart_preview.cpp
 )
-target_link_libraries(reaktio_chart_preview PRIVATE Reaktio::content Reaktio::rhythm)
+target_link_libraries(reaktio_chart_preview PRIVATE Reaktio::content Reaktio::rhythm Reaktio::tools)
 reaktio_configure_target(reaktio_chart_preview)
 
 add_executable(reaktio_font_cooker
@@ -290,6 +290,41 @@ target_include_directories(reaktio_gameplay
 target_link_libraries(reaktio_gameplay PUBLIC Reaktio::entt Reaktio::foundation Reaktio::platform_api Reaktio::render_api)
 target_link_libraries(reaktio_gameplay PUBLIC Reaktio::content)
 reaktio_configure_target(reaktio_gameplay)
+
+# Phase 11 - Tooling and authoring inspector layer.
+# tools/* is a one-way consumer of engine/* state. Inspectors take const
+# refs to engine state, return InspectorPanel data + free-function text
+# formatters. No bgfx, SDL, or ImGui dependency: tools/* is fully
+# headless-testable so the smoke can validate panel output as text and
+# any UI presentation backend (ImGui, CLI, web) becomes a thin skin on
+# top of the same data model.
+add_library(reaktio_tools STATIC
+    engine/tools/src/InspectorPanel.cpp
+    engine/tools/src/TransportInspector.cpp
+    engine/tools/src/TempoMapInspector.cpp
+    engine/tools/src/ActiveCueInspector.cpp
+    engine/tools/src/ModeStateInspector.cpp
+    engine/tools/src/PerformanceHud.cpp
+    engine/tools/src/ReplayFailureView.cpp
+    engine/tools/src/ChartAuthoringInspector.cpp
+    engine/tools/src/AssetBrowserModel.cpp
+    engine/tools/src/RailLayoutInspector.cpp
+)
+add_library(Reaktio::tools ALIAS reaktio_tools)
+target_include_directories(reaktio_tools
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/tools/include"
+)
+target_link_libraries(
+    reaktio_tools
+    PUBLIC
+        Reaktio::content
+        Reaktio::foundation
+        Reaktio::gameplay
+        Reaktio::render_api
+        Reaktio::rhythm
+)
+reaktio_configure_target(reaktio_tools)
 
 add_library(reaktio_platform STATIC
     engine/platform/src/FrameClock.cpp
@@ -447,6 +482,7 @@ target_link_libraries(reaktio_app
         Reaktio::gameplay
         Reaktio::platform
     Reaktio::render
+        Reaktio::tools
 )
 reaktio_configure_target(reaktio_app)
 

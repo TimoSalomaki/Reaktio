@@ -1,5 +1,8 @@
 #include "reaktio/content/ChartPreview.hpp"
 
+#include "reaktio/tools/ChartAuthoringInspector.hpp"
+#include "reaktio/tools/InspectorPanel.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -40,6 +43,7 @@ struct ProgramOptions {
     std::string runtime_label;
     bool list_charts{};
     bool interactive{};
+    bool authoring_inspector{};
     CursorSpec cursor{};
     std::optional<reaktio::rhythm::ChartTick> before_ticks;
     std::optional<reaktio::rhythm::ChartTick> after_ticks;
@@ -197,8 +201,9 @@ void print_help() {
         << "\n"
         << "Interactive:\n"
         << "  --interactive             Enter a scrub REPL after printing the initial snapshot.\n"
-        << "\n"
-        << "If no cursor option is supplied, the tool uses the chart preview_start_ms.\n";
+        << "  --inspector               Emit the chart authoring inspector (per-bar density,\n"
+        << "                            channel/lane histograms, hold table, cross-references).\n"
+        << "\n"        << "If no cursor option is supplied, the tool uses the chart preview_start_ms.\n";
 }
 
 bool parse_arguments(int argc, char** argv, ProgramOptions& options) {
@@ -337,6 +342,10 @@ bool parse_arguments(int argc, char** argv, ProgramOptions& options) {
         }
         if (argument == "--interactive") {
             options.interactive = true;
+            continue;
+        }
+        if (argument == "--inspector") {
+            options.authoring_inspector = true;
             continue;
         }
         if (argument == "--help" || argument == "-h") {
@@ -624,6 +633,17 @@ int main(int argc, char** argv) {
         }
 
         print_snapshot(manifest_record, document, snapshot);
+        if (options.authoring_inspector) {
+            // Phase 11: chart authoring inspector. Builds per-bar
+            // interactive cue density, channel/lane histograms, the
+            // top-N longest holds, and cross-reference issues against
+            // the chart's scroll-profile catalog.
+            const reaktio::tools::ChartAuthoringSnapshot authoring =
+                reaktio::tools::build_chart_authoring_snapshot(document);
+            const reaktio::tools::InspectorPanel panel =
+                reaktio::tools::build_chart_authoring_inspector(authoring);
+            std::cout << '\n' << reaktio::tools::format_inspector_panel(panel);
+        }
         if (!options.interactive) {
             break;
         }

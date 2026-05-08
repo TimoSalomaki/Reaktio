@@ -291,14 +291,14 @@ These are support libraries, not replacements for SDL or bgfx.
 
 ### Phase 11 - Tooling, Debugging, and Authoring Support
 
-- [ ] Build an in-engine debug UI using Dear ImGui or an equivalent tool layer.
-- [ ] Add inspectors for song transport, tempo maps, active cues, mode state, and replay data.
-- [ ] Expand the lightweight chart preview tool into a richer authoring-grade inspector.
-- [ ] Add an asset browser for cooked resources and dependency tracing.
-- [ ] Expand early replay inspection into a full replay viewer with timing-offset overlays and failure-state inspection.
-- [ ] Add a performance HUD with CPU frame cost, bgfx stats, draw-call counts, audio latency, and drift metrics.
-- [ ] Add authoring helpers for lane layout, path editing, camera cue placement, and trigger testing.
-- [ ] Decide whether a full editor should be in-engine, external, or deferred until after multiple shipped slices.
+- [x] Build an in-engine debug UI using Dear ImGui or an equivalent tool layer.
+- [x] Add inspectors for song transport, tempo maps, active cues, mode state, and replay data.
+- [x] Expand the lightweight chart preview tool into a richer authoring-grade inspector.
+- [x] Add an asset browser for cooked resources and dependency tracing.
+- [x] Expand early replay inspection into a full replay viewer with timing-offset overlays and failure-state inspection.
+- [x] Add a performance HUD with CPU frame cost, bgfx stats, draw-call counts, audio latency, and drift metrics.
+- [x] Add authoring helpers for lane layout, path editing, camera cue placement, and trigger testing.
+- [x] Decide whether a full editor should be in-engine, external, or deferred until after multiple shipped slices.
 
 ### Phase 12 - Testing, Optimization, and Release Engineering
 

@@ -15,6 +15,17 @@
 #include "reaktio/gameplay/TypingLesson.hpp"
 #include "reaktio/gameplay/TypingPrompt.hpp"
 
+#include "reaktio/tools/ActiveCueInspector.hpp"
+#include "reaktio/tools/AssetBrowserModel.hpp"
+#include "reaktio/tools/ChartAuthoringInspector.hpp"
+#include "reaktio/tools/InspectorPanel.hpp"
+#include "reaktio/tools/ModeStateInspector.hpp"
+#include "reaktio/tools/PerformanceHud.hpp"
+#include "reaktio/tools/RailLayoutInspector.hpp"
+#include "reaktio/tools/ReplayFailureView.hpp"
+#include "reaktio/tools/TempoMapInspector.hpp"
+#include "reaktio/tools/TransportInspector.hpp"
+
 #include "reaktio/app/AuthoritativeAudioTransport.hpp"
 #include "reaktio/audio/AudioClipLibrary.hpp"
 #include "reaktio/content/CookedChartLibrary.hpp"
@@ -1669,6 +1680,331 @@ int SmokeApplication::run() {
                         << " bar@mid[3/4]=" << bar_3_4_at_mid
                         << " bar@mid[4/4]=" << bar_4_4_at_mid;
         crash_safe_log_.write(foundation::LogLevel::Info, envelope_stream.str());
+    }
+
+    {
+        // Phase 11 inspector layer sanity. Builds each tooling-layer
+        // inspector against synthesized engine state with closed-form
+        // values and verifies the panels:
+        //   - have the expected ID,
+        //   - contain the expected diagnostic rows,
+        //   - assign severities correctly when budgets / failure
+        //     conditions are crossed.
+        // The inspector text itself is also formatted to exercise the
+        // shared format_inspector_panel helper. This is the
+        // headless/CI consumer of the inspector layer; ImGui (or any
+        // other UI) consumes the same panels later as a presentation
+        // skin.
+        const auto find_row = [](const tools::InspectorPanel& panel,
+                                 std::string_view label) -> const tools::InspectorRow* {
+            for (const tools::InspectorRow& row : panel.rows) {
+                if (row.label == label) {
+                    return &row;
+                }
+            }
+            return nullptr;
+        };
+
+        // -- Transport inspector. Drift exceeds the warning threshold
+        //    (25 ms drift vs. 20 ms warn / 60 ms error) so the inspector
+        //    must mark the drift row as Warning and not Error.
+        gameplay::TransportSnapshot transport_snapshot{};
+        transport_snapshot.playback_state = gameplay::TransportPlaybackState::Playing;
+        transport_snapshot.position_seconds = 12.5;
+        transport_snapshot.duration_seconds = 180.0;
+        transport_snapshot.playback_rate = 1.0;
+        transport_snapshot.completed_loops = 1;
+
+        gameplay::TransportDiagnostics transport_diag{};
+        transport_diag.using_audio_authority = true;
+        transport_diag.drift_seconds = 0.025;
+        transport_diag.total_output_latency_seconds = 0.030;
+        transport_diag.device_latency_seconds = 0.020;
+        transport_diag.queued_input_seconds = 0.010;
+        transport_diag.correction_count = 3;
+        transport_diag.recent_correction_count = 1;
+        transport_diag.recent_corrections[0].sequence = 7;
+        transport_diag.recent_corrections[0].correction_type =
+            gameplay::TransportCorrectionType::SoftNudge;
+        transport_diag.recent_corrections[0].drift_before_seconds = 0.022;
+        transport_diag.recent_corrections[0].correction_applied_seconds = 0.0025;
+
+        const tools::InspectorPanel transport_panel = tools::build_transport_inspector(
+            transport_snapshot, transport_diag);
+        const tools::InspectorRow* drift_row = find_row(transport_panel, "drift");
+        const tools::InspectorRow* latency_row = find_row(transport_panel, "total_output_latency");
+        const tools::InspectorRow* state_row = find_row(transport_panel, "playback_state");
+
+        // -- Tempo map inspector. 4/4 at 120 BPM with cursor at 480 ticks
+        //    (one quarter note in) decodes to beat=1, bar=0, beat_index=1.
+        rhythm::TempoMapDefinition tempo_def{};
+        tempo_def.config.ticks_per_quarter_note = 480;
+        tempo_def.tempo_changes.push_back({0, 500'000});  // 120 BPM
+        tempo_def.time_signature_changes.push_back({0, 4, 4});
+        rhythm::TempoMap tempo_map{};
+        const bool tempo_built = tempo_map.rebuild(std::move(tempo_def));
+        const tools::InspectorPanel tempo_panel = tools::build_tempo_map_inspector(
+            tempo_map, /*cursor_tick=*/480);
+        const tools::InspectorRow* tempo_valid_row = find_row(tempo_panel, "valid");
+
+        // -- Score summary inspector. Health=0.0 -> health row Error,
+        //    grade=A -> grade visible, run_state=Failed -> Error.
+        gameplay::ScoreSummary score_summary{};
+        score_summary.score = 87654;
+        score_summary.current_combo = 0;
+        score_summary.max_combo = 42;
+        score_summary.scoreable_hit_count = 100;
+        score_summary.miss_count = 5;
+        score_summary.accuracy_ratio = 0.95;
+        score_summary.multiplier = 2.0;
+        score_summary.health = 0.0;  // Triggers Error severity.
+        score_summary.grade = gameplay::ScoreGrade::A;
+        score_summary.run_state = gameplay::ScoreRunState::Failed;
+        const tools::InspectorPanel score_panel = tools::build_score_summary_inspector(score_summary);
+        const tools::InspectorRow* health_row = find_row(score_panel, "health");
+        const tools::InspectorRow* run_state_row = find_row(score_panel, "run_state");
+
+        // -- Mode descriptor + flow inspectors.
+        gameplay::ModeDescriptor descriptor{};
+        descriptor.id = "smoke.test.mode";
+        descriptor.display_name = "Smoke Test";
+        descriptor.family = "rail";
+        descriptor.capabilities = gameplay::ModeCapabilities::UsesActionInput |
+                                  gameplay::ModeCapabilities::UsesTransport |
+                                  gameplay::ModeCapabilities::EmitsRenderPackets |
+                                  gameplay::ModeCapabilities::RecordsReplay;
+        const tools::InspectorPanel descriptor_panel = tools::build_mode_descriptor_inspector(descriptor);
+
+        gameplay::ModeFlowSnapshot flow_snapshot{};
+        flow_snapshot.state = gameplay::ModeFlowState::Failed;
+        flow_snapshot.last_reason = gameplay::ModeFlowReason::HealthDepleted;
+        flow_snapshot.transition_count = 2;
+        flow_snapshot.results.present = false;
+        flow_snapshot.flags.no_fail_active = false;
+        flow_snapshot.flags.practice_active = true;
+        const tools::InspectorPanel flow_panel = tools::build_mode_flow_inspector(flow_snapshot);
+
+        // -- Performance HUD. Frame ms 18 vs 16.67 budget -> Warning;
+        //    draw calls 2000 vs 1500 budget -> Warning (under 1.25x).
+        foundation::TelemetrySnapshot telemetry{};
+        telemetry.frame_ms = 18.0;
+        telemetry.simulation_ms = 1.5;
+        telemetry.render_submission_ms = 2.0;
+        telemetry.audio_drift_ms = 5.0;
+        telemetry.resident_memory_mib = 256;
+        telemetry.draw_calls = 2000;
+        telemetry.visible_cues = 4000;
+        const foundation::RuntimeBudget budget = foundation::make_bootstrap_budget();
+        tools::PerformanceHudInputs hud_inputs{};
+        hud_inputs.telemetry = &telemetry;
+        hud_inputs.budget = &budget;
+        hud_inputs.transport = &transport_diag;
+        const tools::InspectorPanel hud_panel = tools::build_performance_hud(hud_inputs);
+        const tools::InspectorRow* frame_row = find_row(hud_panel, "frame_ms");
+        const tools::InspectorRow* draw_row = find_row(hud_panel, "draw_calls");
+
+        // -- Replay timing-overlay + failure inspectors. Synthesize a
+        //    minimal session with one miss followed by a failure trigger.
+        gameplay::ReplaySession session{};
+        session.metadata.mode_id = "smoke.replay";
+        session.metadata.root_random_seed = 0xDEADBEEFull;
+        gameplay::ReplayJudgementSample miss{};
+        miss.frame_index = 100;
+        miss.simulation_step = 50;
+        miss.cue_id = 11;
+        miss.judgement = rhythm::TimingJudgement::Miss;
+        miss.corrected_error_microseconds = 35000;
+        miss.run_state = gameplay::ScoreRunState::Active;
+        session.judgement_samples.push_back(miss);
+
+        gameplay::ReplayJudgementSample failure{};
+        failure.frame_index = 200;
+        failure.simulation_step = 100;
+        failure.cue_id = 22;
+        failure.judgement = rhythm::TimingJudgement::Miss;
+        failure.corrected_error_microseconds = 50000;
+        failure.score_after = 1000;
+        failure.combo_after = 0;
+        failure.run_state = gameplay::ScoreRunState::Failed;
+        session.judgement_samples.push_back(failure);
+
+        gameplay::ReplayCheckpoint pre_failure_checkpoint{};
+        pre_failure_checkpoint.frame_index = 150;
+        pre_failure_checkpoint.simulation_step = 75;
+        pre_failure_checkpoint.label = "pre_failure";
+        pre_failure_checkpoint.authoritative_state_hash = 0xC0DECAFEull;
+        session.checkpoints.push_back(pre_failure_checkpoint);
+
+        gameplay::ReplayInspectionView view = gameplay::build_replay_inspection_view(session);
+        const tools::TimingOffsetOverlay overlay = tools::build_timing_offset_overlay(view);
+        const tools::InspectorPanel timing_overlay_panel =
+            tools::build_timing_offset_inspector(view);
+        const tools::ReplayFailureState failure_state =
+            tools::build_replay_failure_state(session);
+        const tools::InspectorPanel failure_panel =
+            tools::build_replay_failure_inspector(failure_state);
+
+        // -- Rail path + layout inspectors. Three control points,
+        //    obstacles at known positions to trigger an overlap.
+        gameplay::RailPath rail_path{};
+        std::vector<gameplay::RailPathControlPoint> control_points;
+        control_points.push_back({{0.0f, 0.0f, 0.0f}});
+        control_points.push_back({{0.0f, 0.0f, 10.0f}});
+        control_points.push_back({{10.0f, 0.0f, 10.0f}});
+        const bool rail_path_built = rail_path.rebuild(std::move(control_points));
+
+        gameplay::RailObstacleField rail_field{};
+        std::vector<gameplay::RailObstacle> obstacles;
+        gameplay::RailObstacle obstacle_a{};
+        obstacle_a.obstacle_id = 1001;
+        obstacle_a.arc_length = 5.0;
+        obstacle_a.arc_length_half_extent = 1.0;
+        obstacle_a.signed_lane_min = 0;
+        obstacle_a.signed_lane_max = 1;
+        obstacles.push_back(obstacle_a);
+        gameplay::RailObstacle obstacle_b{};
+        obstacle_b.obstacle_id = 1002;
+        obstacle_b.arc_length = 5.5;
+        obstacle_b.arc_length_half_extent = 1.0;
+        obstacle_b.signed_lane_min = 1;
+        obstacle_b.signed_lane_max = 2;
+        obstacles.push_back(obstacle_b);  // Overlaps a in arc + lane=1.
+        gameplay::RailObstacle obstacle_c{};
+        obstacle_c.obstacle_id = 1003;
+        obstacle_c.arc_length = 15.0;
+        obstacle_c.arc_length_half_extent = 0.5;
+        obstacle_c.signed_lane_min = -1;
+        obstacle_c.signed_lane_max = -1;
+        obstacles.push_back(obstacle_c);
+        rail_field.rebuild(std::move(obstacles));
+        const tools::InspectorPanel rail_path_panel = tools::build_rail_path_inspector(rail_path);
+        const tools::RailLayoutSnapshot rail_layout =
+            tools::build_rail_layout_snapshot(rail_field, rail_path);
+        const tools::InspectorPanel rail_layout_panel = tools::build_rail_layout_inspector(rail_layout);
+
+        // -- Chart authoring inspector. Synthesize a tiny chart with
+        //    one note, one hold, and a hazard sharing the same channel
+        //    so the histogram + hold table both populate.
+        content::ChartDocument chart_doc{};
+        chart_doc.tempo_map.config.ticks_per_quarter_note = 480;
+        chart_doc.tempo_map.tempo_changes.push_back({0, 500'000});
+        chart_doc.tempo_map.time_signature_changes.push_back({0, 4, 4});
+        chart_doc.default_scroll_profile_id = "default";
+        content::ScrollProfileDefinition profile{};
+        profile.id = "default";
+        chart_doc.scroll_profiles.push_back(std::move(profile));
+        {
+            content::NoteCue note{};
+            note.cue.event.id = "note.0";
+            note.cue.event.placement.start_tick = 0;
+            note.cue.route.channel_index = 0u;
+            note.cue.route.lane_index = 0u;
+            chart_doc.events.emplace_back(std::move(note));
+        }
+        {
+            content::HoldCue hold{};
+            hold.cue.event.id = "hold.0";
+            hold.cue.event.placement.start_tick = 480;
+            hold.cue.event.placement.duration_ticks = 960;
+            hold.cue.route.channel_index = 0u;
+            hold.cue.route.lane_index = 1u;
+            chart_doc.events.emplace_back(std::move(hold));
+        }
+        {
+            content::HazardCue hazard{};
+            hazard.cue.event.id = "hazard.0";
+            hazard.cue.event.placement.start_tick = 1920;
+            hazard.cue.route.channel_index = 1u;
+            hazard.cue.route.lane_index = 2u;
+            chart_doc.events.emplace_back(std::move(hazard));
+        }
+        const tools::ChartAuthoringSnapshot chart_authoring =
+            tools::build_chart_authoring_snapshot(chart_doc);
+        const tools::InspectorPanel chart_authoring_panel =
+            tools::build_chart_authoring_inspector(chart_authoring);
+
+        // -- Asset browser. Pulls from the runtime's default cooked
+        //    chart manifest, which the smoke build cooks before the
+        //    application starts. The browser is robust to missing
+        //    manifests (returns loaded_from_manifest=false) so it stays
+        //    safe to invoke unconditionally here.
+        const tools::AssetBrowserSnapshot asset_browser =
+            tools::build_asset_browser_snapshot_default();
+        const tools::InspectorPanel asset_browser_panel =
+            tools::build_asset_browser_inspector(asset_browser);
+
+        std::ostringstream inspector_stream;
+        inspector_stream
+            << "Inspector sanity:"
+            << " transport-id=" << transport_panel.id
+            << " transport-rows=" << transport_panel.rows.size()
+            << " drift-severity="
+            << (drift_row != nullptr ? tools::to_string(drift_row->severity) : "missing")
+            << " latency-severity="
+            << (latency_row != nullptr ? tools::to_string(latency_row->severity) : "missing")
+            << " state-severity="
+            << (state_row != nullptr ? tools::to_string(state_row->severity) : "missing")
+            << " tempo-built=" << (tempo_built ? 1 : 0)
+            << " tempo-valid=" << (tempo_valid_row != nullptr ? tempo_valid_row->value : "missing")
+            << " score-id=" << score_panel.id
+            << " score-health-severity="
+            << (health_row != nullptr ? tools::to_string(health_row->severity) : "missing")
+            << " score-run-severity="
+            << (run_state_row != nullptr ? tools::to_string(run_state_row->severity) : "missing")
+            << " descriptor-rows=" << descriptor_panel.rows.size()
+            << " flow-id=" << flow_panel.id
+            << " hud-id=" << hud_panel.id
+            << " hud-rows=" << hud_panel.rows.size()
+            << " frame-severity="
+            << (frame_row != nullptr ? tools::to_string(frame_row->severity) : "missing")
+            << " draw-severity="
+            << (draw_row != nullptr ? tools::to_string(draw_row->severity) : "missing")
+            << " overlay-samples=" << overlay.total_samples
+            << " overlay-buckets=" << overlay.buckets.size()
+            << " failure-ever-failed=" << (failure_state.ever_failed ? 1 : 0)
+            << " failure-first-miss-cue="
+            << (failure_state.first_miss.has_value() ? failure_state.first_miss->cue_id : 0ull)
+            << " failure-trigger-step="
+            << (failure_state.failure_trigger.has_value() ? failure_state.failure_trigger->simulation_step : 0ull)
+            << " failure-checkpoint-step="
+            << (failure_state.nearest_checkpoint_before_failure.has_value()
+                    ? failure_state.nearest_checkpoint_before_failure->simulation_step
+                    : 0ull)
+            << " rail-path-built=" << (rail_path_built ? 1 : 0)
+            << " rail-path-rows=" << rail_path_panel.rows.size()
+            << " rail-layout-obstacles=" << rail_layout.obstacle_count
+            << " rail-layout-overlaps=" << rail_layout.overlap_entries.size()
+            << " rail-layout-lanes=" << rail_layout.lane_histogram.size()
+            << " chart-authoring-events=" << chart_authoring.summary.event_count
+            << " chart-authoring-channels=" << chart_authoring.channel_histogram.size()
+            << " chart-authoring-lanes=" << chart_authoring.lane_histogram.size()
+            << " chart-authoring-issues=" << chart_authoring.cross_reference_issues.size()
+            << " timing-overlay-id=" << timing_overlay_panel.id
+            << " timing-overlay-rows=" << timing_overlay_panel.rows.size()
+            << " timing-overlay-bodies=" << timing_overlay_panel.body_lines.size()
+            << " failure-panel-id=" << failure_panel.id
+            << " failure-panel-rows=" << failure_panel.rows.size()
+            << " failure-panel-bodies=" << failure_panel.body_lines.size()
+            << " asset-browser-loaded=" << (asset_browser.loaded_from_manifest ? 1 : 0)
+            << " asset-browser-records=" << asset_browser.records.size();
+        crash_safe_log_.write(foundation::LogLevel::Info, inspector_stream.str());
+
+        // Render a few panels as text and confirm the format helper is
+        // non-empty so any future regression in the formatter surfaces.
+        // Includes the replay-failure and timing-offset panels because
+        // the Phase 11 plan item asks for a "full replay viewer" with
+        // both surfaces exposed.
+        const std::string transport_text = tools::format_inspector_panel(transport_panel);
+        const std::string layout_text = tools::format_inspector_panel(rail_layout_panel);
+        const std::string failure_text = tools::format_inspector_panel(failure_panel);
+        const std::string timing_text = tools::format_inspector_panel(timing_overlay_panel);
+        std::ostringstream format_stream;
+        format_stream << "Inspector format: transport-text-bytes="
+                      << transport_text.size()
+                      << " rail-layout-text-bytes=" << layout_text.size()
+                      << " failure-text-bytes=" << failure_text.size()
+                      << " timing-text-bytes=" << timing_text.size();
+        crash_safe_log_.write(foundation::LogLevel::Info, format_stream.str());
     }
 
     {

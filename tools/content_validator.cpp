@@ -1,6 +1,9 @@
 #include "reaktio/content/ContentValidation.hpp"
 #include "reaktio/foundation/CrashSafeLog.hpp"
 
+#include "reaktio/tools/AssetBrowserModel.hpp"
+#include "reaktio/tools/InspectorPanel.hpp"
+
 #include <cctype>
 #include <filesystem>
 #include <iostream>
@@ -16,6 +19,7 @@ struct ProgramOptions {
     bool raw_root_set{};
     bool cooked_root_set{};
     bool show_help{};
+    bool show_asset_browser{};
 };
 
 std::string trim_copy(std::string_view value) {
@@ -110,6 +114,8 @@ void print_help() {
         << "                          Defaults to all.\n"
         << "\n"
         << "Other:\n"
+        << "  --asset-browser         Print the asset browser snapshot (cooked chart\n"
+        << "                          manifest + dependency graph) after validation.\n"
         << "  -h, --help              Show this help text.\n";
 }
 
@@ -148,6 +154,10 @@ bool parse_arguments(int argc, char** argv, ProgramOptions& options) {
                 continue;
             }
             return false;
+        }
+        if (argument == "--asset-browser") {
+            options.show_asset_browser = true;
+            continue;
         }
         if (argument == "--help" || argument == "-h") {
             options.show_help = true;
@@ -220,6 +230,27 @@ int main(int argc, char** argv) {
         print_issue(issue);
     }
     print_summary(validator.summary());
+
+    if (options.show_asset_browser) {
+        // Phase 11 asset browser. Dumps the cooked chart manifest and
+        // its dependency graph as an InspectorPanel; the same panel
+        // data drives the eventual in-engine ImGui asset browser.
+        //
+        // Honor --cooked-root when the user explicitly overrode it so
+        // the asset browser inspects the same tree the validator just
+        // checked. The default-discovery fallback is reserved for the
+        // case where neither flag is supplied.
+        reaktio::tools::AssetBrowserSnapshot snapshot{};
+        if (options.cooked_root_set) {
+            snapshot = reaktio::tools::build_asset_browser_snapshot(
+                options.validation.paths.cooked_root / "charts" / "manifest.ini");
+        } else {
+            snapshot = reaktio::tools::build_asset_browser_snapshot_default();
+        }
+        const reaktio::tools::InspectorPanel panel =
+            reaktio::tools::build_asset_browser_inspector(snapshot);
+        std::cout << '\n' << reaktio::tools::format_inspector_panel(panel);
+    }
 
     if (!valid) {
         std::cout << "Content validation failed.\n";
